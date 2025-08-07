@@ -3037,6 +3037,10 @@ int mme_enb_remove(mme_enb_t *enb)
     ogs_assert(enb);
     ogs_assert(enb->sctp.sock);
 
+    char buf[OGS_ADDRSTRLEN];
+    diagnostic_broadcast("{\"Command\":\"eNB Disconnect\",\"Address\":\"%s\"}", OGS_ADDR(enb->sctp.addr, buf));
+
+
     ogs_list_remove(&self.enb_list, enb);
 
     memset(&e, 0, sizeof(e));

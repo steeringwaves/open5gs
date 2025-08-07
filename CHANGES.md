@@ -38,7 +38,7 @@ diagnostic_broadcast("{\"Command\":\"MME Terminate\"}");
         sess->ipv4 ? OGS_INET_NTOP(&sess->ipv4->addr, buf1) : "",
         sess->ipv6 ? OGS_INET6_NTOP(&sess->ipv6->addr, buf2) : "");
 
-
+// UE Attach/Release
 diagnostic_broadcast("{\"Command\":\"UE Attach\",\"IMSI\":\"%s\", \"IMEI\":\"%s\"}",
 	smf_ue->imsi_bcd,
 	mme_ue->imeisv_bcd);
@@ -46,12 +46,18 @@ diagnostic_broadcast("{\"Command\":\"UE Attach\",\"IMSI\":\"%s\", \"IMEI\":\"%s\
 diagnostic_broadcast("{\"Command\":\"UE Release\",\"IMSI\":\"%s\"}", mme_ue->imsi_bcd);
 diagnostic_broadcast("{\"Command\":\"UE Release\",\"SUCI\":\"%s\"}", amf_ue->suci ? amf_ue->suci : "Unknown");
 
+// eNB
 diagnostic_broadcast("{\"Command\":\"eNB Connect\",\"Address\":\"%s\"}", OGS_ADDR(enb->sctp.addr, buf));
+
+char buf[OGS_ADDRSTRLEN];
+diagnostic_broadcast("{\"Command\":\"eNB Disconnect\",\"Address\":\"%s\"}", OGS_ADDR(enb->sctp.addr, buf));
+
+// gNB
 
 diagnostic_broadcast("{\"Command\":\"gNB Connect\",\"Address\":\"%s\"}", OGS_ADDR(gnb->sctp.addr, buf));
 
-// TODO need gNB Disconnect and eNB Disconnect
+char buf[OGS_ADDRSTRLEN];
+diagnostic_broadcast("{\"Command\":\"gNB Disconnect\",\"Address\":\"%s\"}", OGS_ADDR(gnb->sctp.addr, buf));
 
 
 ```
-

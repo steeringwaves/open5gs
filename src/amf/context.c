@@ -1283,6 +1283,9 @@ void amf_gnb_remove(amf_gnb_t *gnb)
     ogs_assert(gnb);
     ogs_assert(gnb->sctp.sock);
 
+    char buf[OGS_ADDRSTRLEN];
+    diagnostic_broadcast("{\"Command\":\"gNB Disconnect\",\"Address\":\"%s\"}", OGS_ADDR(gnb->sctp.addr, buf));
+
     ogs_list_remove(&self.gnb_list, gnb);
 
     memset(&e, 0, sizeof(e));
