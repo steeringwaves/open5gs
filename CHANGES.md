@@ -8,3 +8,35 @@
 - `/src/smf/gn-handler.c` line 306 `ogs_info("UE IMSI[%s] APN[%s] IPv4[%s] IPv6[%s]",` should also emit
 - 
 
+```c
+    diagnostic_broadcast("{\"Command\":\"Session Create\",\"IMSI\":\"%s\", \"APN\":\"%s\", \"IPv4\":\"%s\", \"IPv6\":\"%s\"}",
+        smf_ue->imsi_bcd,
+        sess->session.name,
+        sess->ipv4 ? OGS_INET_NTOP(&sess->ipv4->addr, buf1) : "",
+        sess->ipv6 ? OGS_INET6_NTOP(&sess->ipv6->addr, buf2) : "");
+```
+
+
+```c
+    diagnostic_broadcast("{\"Command\":\"Session Create\",\"IMSI\":\"%s\", \"APN\":\"%s\", \"IPv4\":\"%s\", \"IPv6\":\"%s\"}",
+        smf_ue->imsi_bcd,
+        sess->session.name,
+        sess->ipv4 ? OGS_INET_NTOP(&sess->ipv4->addr, buf1) : "",
+        sess->ipv6 ? OGS_INET6_NTOP(&sess->ipv6->addr, buf2) : "");
+
+
+        diagnostic_broadcast("{\"Command\":\"Session Remove\",\"IMSI\":\"%s\", \"APN\":\"%s\"}", \
+            mme_ue->imsi_bcd, \
+            (__sESS)->session ? (__sESS)->session->name : "Unknown"); \
+
+    diagnostic_broadcast("{\"Command\":\"Session Remove\",\"IMSI\":\"%s\", \"APN\":\"%s\", \"Index\":\"%d\", \"IPv4\":\"%s\", \"IPv6\":\"%s\"}",
+        smf_ue->supi ? smf_ue->supi : smf_ue->imsi_bcd,
+        sess->session.name, sess->psi,
+        sess->ipv4 ? OGS_INET_NTOP(&sess->ipv4->addr, buf1) : "",
+        sess->ipv6 ? OGS_INET6_NTOP(&sess->ipv6->addr, buf2) : "");
+
+          diagnostic_broadcast("{\"Command\":\"Attach\",\"IMSI\":\"%s\", \"IMEI\":\"%s\"}",
+            smf_ue->imsi_bcd,
+            mme_ue->imeisv_bcd);
+```
+

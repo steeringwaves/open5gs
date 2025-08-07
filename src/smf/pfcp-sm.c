@@ -467,6 +467,13 @@ static void pfcp_restoration(ogs_pfcp_node_t *node)
                             OGS_INET_NTOP(&sess->ipv4->addr, buf1) : "",
                         sess->ipv6 ?
                             OGS_INET6_NTOP(&sess->ipv6->addr, buf2) : "");
+
+                    diagnostic_broadcast("{\"Command\":\"Session Create\",\"IMSI\":\"%s\", \"APN\":\"%s\", \"IPv4\":\"%s\", \"IPv6\":\"%s\"}",
+                        smf_ue->imsi_bcd,
+                        sess->session.name,
+                        sess->ipv4 ? OGS_INET_NTOP(&sess->ipv4->addr, buf1) : "",
+                        sess->ipv6 ? OGS_INET6_NTOP(&sess->ipv6->addr, buf2) : "");
+
                     ogs_assert(OGS_OK ==
                         smf_epc_pfcp_send_session_establishment_request(
                             sess, OGS_INVALID_POOL_ID,
@@ -478,6 +485,13 @@ static void pfcp_restoration(ogs_pfcp_node_t *node)
                             OGS_INET_NTOP(&sess->ipv4->addr, buf1) : "",
                         sess->ipv6 ?
                             OGS_INET6_NTOP(&sess->ipv6->addr, buf2) : "");
+
+                    diagnostic_broadcast("{\"Command\":\"Session Create\",\"SUPI\":\"%s\", \"APN\":\"%s\", \"IPv4\":\"%s\", \"IPv6\":\"%s\"}",
+                        smf_ue->supi,
+                        sess->session.name,
+                        sess->ipv4 ? OGS_INET_NTOP(&sess->ipv4->addr, buf1) : "",
+                        sess->ipv6 ? OGS_INET6_NTOP(&sess->ipv6->addr, buf2) : "");
+
                     ogs_assert(OGS_OK ==
                             smf_5gc_pfcp_send_session_establishment_request(
                                 sess, OGS_PFCP_CREATE_RESTORATION_INDICATION));
