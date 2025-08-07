@@ -3183,6 +3183,12 @@ void enb_ue_remove(enb_ue_t *enb_ue)
 
     enb = mme_enb_find_by_id(enb_ue->enb_id);
 
+    mme_ue_t *mme_ue = NULL;
+
+    mme_ue = mme_ue_find_by_id(enb_ue->mme_ue_id);
+
+    if (mme_ue) diagnostic_broadcast("{\"Command\":\"UE Release\",\"IMSI\":\"%s\"}", mme_ue->imsi_bcd);
+
     if (enb) ogs_list_remove(&enb->enb_ue_list, enb_ue);
 
     ogs_assert(enb_ue->t_s1_holding);
