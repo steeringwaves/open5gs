@@ -1548,7 +1548,7 @@ void emm_state_initial_context_setup(ogs_fsm_t *s, mme_event_t *e)
           ogs_info("[%s] Attach complete: IMEI: %s", mme_ue->imsi_bcd, mme_ue->imeisv_bcd);
           diagnostic_broadcast("{\"Command\":\"UE Attach\",\"IMSI\":\"%s\", \"IMEI\":\"%s\"}",
             mme_ue->imsi_bcd,
-            mme_ue->imeisv_bcd);
+            mme_ue->imeisv_bcd ? mme_ue->imeisv_bcd : "");
 
         /*
          * TS24.301

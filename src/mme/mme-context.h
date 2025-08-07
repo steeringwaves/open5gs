@@ -834,8 +834,9 @@ struct mme_ue_s {
         ogs_info("Removed Session: UE IMSI:[%s] APN:[%s]", \
                 mme_ue->imsi_bcd, \
                 (__sESS)->session ? (__sESS)->session->name : "Unknown"); \
-        diagnostic_broadcast("{\"Command\":\"Session Remove\",\"IMSI\":\"%s\", \"APN\":\"%s\"}", \
+        diagnostic_broadcast("{\"Command\":\"Session Remove\",\"IMSI\":\"%s\",\"IMEI\":\"%s\",\"APN\":\"%s\"}", \
             mme_ue->imsi_bcd, \
+            mme_ue->imeisv_bcd ? mme_ue->imeisv_bcd : "", \
             (__sESS)->session ? (__sESS)->session->name : "Unknown"); \
         if (mme_sess_count(mme_ue) == 1) /* Last Session */ \
             CLEAR_SESSION_CONTEXT(mme_ue); \
