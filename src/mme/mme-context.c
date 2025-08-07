@@ -2014,12 +2014,14 @@ int mme_context_parse_config(void)
                                 ogs_yaml_iter_value(&network_name_iter);
                             uint8_t size = strlen(c_network_name);
                             uint8_t i;
-                            for (i = 0;i<size;i++) {
+                            for (i = 0; i < size &&
+                                 (((i * 2) + 1) <
+                                  (OGS_NAS_MAX_NETWORK_NAME_LEN - 1));
+                                 i++) {
                                 /* Workaround to convert the ASCII to USC-2 */
-                                network_full_name->name[i*2] = 0;
-                                network_full_name->name[(i*2)+1] =
+                                network_full_name->name[i * 2] = 0;
+                                network_full_name->name[i * 2 + 1] =
                                     c_network_name[i];
-
                             }
                             network_full_name->length = size*2+1;
                             network_full_name->coding_scheme = 1;
@@ -2031,12 +2033,14 @@ int mme_context_parse_config(void)
                                 ogs_yaml_iter_value(&network_name_iter);
                             uint8_t size = strlen(c_network_name);
                             uint8_t i;
-                            for (i = 0;i<size;i++) {
+                            for (i = 0; i < size &&
+                                 (((i * 2) + 1) <
+                                  (OGS_NAS_MAX_NETWORK_NAME_LEN - 1));
+                                 i++) {
                                 /* Workaround to convert the ASCII to USC-2 */
-                                network_short_name->name[i*2] = 0;
-                                network_short_name->name[(i*2)+1] =
+                                network_short_name->name[i * 2] = 0;
+                                network_short_name->name[i * 2 + 1] =
                                     c_network_name[i];
-
                             }
                             network_short_name->length = size*2+1;
                             network_short_name->coding_scheme = 1;
@@ -2834,10 +2838,14 @@ void mme_vlr_close(mme_vlr_t *vlr)
 {
     ogs_assert(vlr);
 
-    if (vlr->poll)
+    if (vlr->poll) {
         ogs_pollset_remove(vlr->poll);
-    if (vlr->sock)
+        vlr->poll = NULL;
+    }
+    if (vlr->sock) {
         ogs_sctp_destroy(vlr->sock);
+        vlr->sock = NULL;
+    }
 }
 
 mme_vlr_t *mme_vlr_find_by_sock(const ogs_sock_t *sock)
@@ -3694,7 +3702,7 @@ void mme_ue_remove(mme_ue_t *mme_ue)
     ogs_timer_delete(mme_ue->t_implicit_detach.timer);
     ogs_timer_delete(mme_ue->gn.t_gn_holding);
 
-    enb_ue_unlink(mme_ue);
+    mme_ue->enb_ue_id = OGS_INVALID_POOL_ID;
 
     mme_sess_remove_all(mme_ue);
     mme_session_remove_all(mme_ue);
@@ -4175,16 +4183,16 @@ void enb_ue_associate_mme_ue(enb_ue_t *enb_ue, mme_ue_t *mme_ue)
     enb_ue->mme_ue_id = mme_ue->id;
 }
 
-void enb_ue_deassociate(enb_ue_t *enb_ue)
-{
-    ogs_assert(enb_ue);
-    enb_ue->mme_ue_id = OGS_INVALID_POOL_ID;
-}
-
-void enb_ue_unlink(mme_ue_t *mme_ue)
+void enb_ue_deassociate_mme_ue(enb_ue_t *enb_ue, mme_ue_t *mme_ue)
 {
     ogs_assert(mme_ue);
-    mme_ue->enb_ue_id = OGS_INVALID_POOL_ID;
+    ogs_assert(enb_ue);
+
+    if (mme_ue->enb_ue_id == enb_ue->id)
+        mme_ue->enb_ue_id = OGS_INVALID_POOL_ID;
+    else
+        ogs_error("Cannot deassociate mme_ue->enb_ue_id[%d] != enb_ue->id[%d]",
+                mme_ue->enb_ue_id, enb_ue->id);
 }
 
 void enb_ue_source_associate_target(enb_ue_t *source_ue, enb_ue_t *target_ue)
@@ -4253,16 +4261,16 @@ void sgw_ue_associate_mme_ue(sgw_ue_t *sgw_ue, mme_ue_t *mme_ue)
     sgw_ue->mme_ue_id = mme_ue->id;
 }
 
-void sgw_ue_deassociate(sgw_ue_t *sgw_ue)
-{
-    ogs_assert(sgw_ue);
-    sgw_ue->mme_ue_id = OGS_INVALID_POOL_ID;
-}
-
-void sgw_ue_unlink(mme_ue_t *mme_ue)
+void sgw_ue_deassociate_mme_ue(sgw_ue_t *sgw_ue, mme_ue_t *mme_ue)
 {
     ogs_assert(mme_ue);
-    mme_ue->sgw_ue_id = OGS_INVALID_POOL_ID;
+    ogs_assert(sgw_ue);
+
+    if (mme_ue->sgw_ue_id == sgw_ue->id)
+        mme_ue->sgw_ue_id = OGS_INVALID_POOL_ID;
+    else
+        ogs_error("Cannot deassociate mme_ue->sgw_ue_id[%d] != sgw_ue->id[%d]",
+                mme_ue->sgw_ue_id, sgw_ue->id);
 }
 
 void sgw_ue_source_associate_target(sgw_ue_t *source_ue, sgw_ue_t *target_ue)

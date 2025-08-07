@@ -1084,6 +1084,9 @@ void smf_ue_remove(smf_ue_t *smf_ue)
         ogs_free(smf_ue->supi);
     }
 
+    if (smf_ue->gpsi)
+        ogs_free(smf_ue->gpsi);
+
     if (smf_ue->imsi_len) {
         ogs_hash_set(self.imsi_hash, smf_ue->imsi, smf_ue->imsi_len, NULL);
     }
@@ -1194,14 +1197,19 @@ void smf_sess_select_upf(smf_sess_t *sess)
         ogs_pfcp_self()->pfcp_node =
             ogs_list_last(&ogs_pfcp_self()->pfcp_peer_list);
 
-    /* setup GTP session with selected UPF */
-    ogs_pfcp_self()->pfcp_node =
-        selected_upf_node(ogs_pfcp_self()->pfcp_node, sess);
-    ogs_assert(ogs_pfcp_self()->pfcp_node);
-    OGS_SETUP_PFCP_NODE(sess, ogs_pfcp_self()->pfcp_node);
-    ogs_debug("UE using UPF on IP %s",
-            ogs_sockaddr_to_string_static(
-                ogs_pfcp_self()->pfcp_node->addr_list));
+    if (ogs_pfcp_self()->pfcp_node) {
+        /* setup GTP session with selected UPF */
+        ogs_pfcp_self()->pfcp_node =
+            selected_upf_node(ogs_pfcp_self()->pfcp_node, sess);
+        ogs_assert(ogs_pfcp_self()->pfcp_node);
+        OGS_SETUP_PFCP_NODE(sess, ogs_pfcp_self()->pfcp_node);
+        ogs_debug("UE using UPF on IP %s",
+                ogs_sockaddr_to_string_static(
+                    ogs_pfcp_self()->pfcp_node->addr_list));
+    } else {
+        ogs_error("No suitable UPF found for session");
+        ogs_assert(sess->pfcp_node == NULL);
+    }
 }
 
 smf_sess_t *smf_sess_add_by_apn(smf_ue_t *smf_ue, char *apn, uint8_t rat_type)
@@ -1505,7 +1513,7 @@ smf_sess_t *smf_sess_add_by_sbi_message(ogs_sbi_message_t *message)
     }
 
     if (SmContextCreateData->is_pdu_session_id == false) {
-        ogs_error("PDU session identitiy is unassigned");
+        ogs_error("PDU session identity is unassigned");
         return NULL;
     }
 
@@ -2931,7 +2939,11 @@ int smf_pco_build(uint8_t *pco_buf, uint8_t *buffer, int length)
     memset(&pco_ipcp, 0, sizeof(pco_ipcp));
 
     size = ogs_pco_parse(&ue, buffer, length);
-    ogs_assert(size);
+    if (size != length) {
+        ogs_error("ogs_pco_parse() failed [size:%d != length:%d]",
+                size, length);
+        return 0;
+    }
 
     memset(&smf, 0, sizeof(ogs_pco_t));
     smf.ext = ue.ext;
@@ -3143,6 +3155,7 @@ int smf_pco_build(uint8_t *pco_buf, uint8_t *buffer, int length)
     }
 
     size = ogs_pco_build(pco_buf, OGS_MAX_PCO_LEN, &smf);
+    ogs_expect(size > 0);
     return size;
 }
 

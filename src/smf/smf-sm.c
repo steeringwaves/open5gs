@@ -80,6 +80,7 @@ void smf_state_operational(ogs_fsm_t *s, smf_event_t *e)
     ogs_sbi_message_t sbi_message;
     ogs_sbi_xact_t *sbi_xact = NULL;
     ogs_pool_id_t sbi_xact_id = OGS_INVALID_POOL_ID;
+    ogs_sbi_object_t *sbi_object = NULL;
     ogs_pool_id_t sbi_object_id = OGS_INVALID_POOL_ID;
 
     ogs_nas_5gs_message_t nas_message;
@@ -710,10 +711,33 @@ void smf_state_operational(ogs_fsm_t *s, smf_event_t *e)
             CASE(OGS_SBI_RESOURCE_NAME_NF_INSTANCES)
                 nf_instance = e->h.sbi.data;
                 ogs_assert(nf_instance);
-                ogs_assert(OGS_FSM_STATE(&nf_instance->sm));
 
-                e->h.sbi.message = &sbi_message;
-                ogs_fsm_dispatch(&nf_instance->sm, e);
+    /*
+     * Guard against dispatching to an FSM that may have been finalized
+     * by an asynchronous shutdown triggered by SIGTERM.
+     *
+     * In init.c’s event_termination(), which can be invoked asynchronously
+     * when the process receives SIGTERM, we iterate over all NF instances:
+     *     ogs_list_for_each(&ogs_sbi_self()->nf_instance_list, nf_instance)
+     *         ogs_sbi_nf_fsm_fini(nf_instance);
+     * and call ogs_fsm_fini() on each instance’s FSM. That finalizes the FSM
+     * and its state is reset to zero.
+     *
+     * After event_termination(), any incoming SBI response—such as an NRF
+     * client callback arriving after deregistration—would otherwise be
+     * dispatched into a dead FSM and trigger an assertion failure.
+     *
+     * To avoid this, we check OGS_FSM_STATE(&nf_instance->sm):
+     *   - If non-zero, the FSM is still active and can safely handle the event.
+     *   - If zero, the FSM has already been finalized by event_termination(),
+     *     so we log and drop the event to allow graceful shutdown.
+     */
+                if (OGS_FSM_STATE(&nf_instance->sm)) {
+                    e->h.sbi.message = &sbi_message;
+                    ogs_fsm_dispatch(&nf_instance->sm, e);
+                } else
+                    ogs_error("NF instance FSM has been finalized");
+
                 break;
 
             CASE(OGS_SBI_RESOURCE_NAME_SUBSCRIPTIONS)
@@ -927,9 +951,14 @@ void smf_state_operational(ogs_fsm_t *s, smf_event_t *e)
                 ogs_assert(true == ogs_sbi_send_http_status_no_content(stream));
             } else if (state == SMF_UECM_STATE_DEREGISTERED_BY_AMF) {
                 /* SMF Deregistration */
-                ogs_assert(stream);
-                ogs_assert(true == ogs_sbi_send_http_status_no_content(stream));
+                if (stream)
+                    ogs_assert(true ==
+                            ogs_sbi_send_http_status_no_content(stream));
+                else
+                    ogs_error("Stream has already been removed");
+
                 SMF_SESS_CLEAR(sess);
+
             } else if (state == SMF_UECM_STATE_DEREGISTERED_BY_N1_N2_RELEASE) {
                 /* SMF Deregistration */
                 ogs_assert(true == smf_sbi_send_sm_context_status_notify(sess));
@@ -1040,14 +1069,30 @@ void smf_state_operational(ogs_fsm_t *s, smf_event_t *e)
             /* Here, we should not use ogs_assert(stream)
              * since 'namf-comm' service has no an associated stream. */
 
+            sbi_object = sbi_xact->sbi_object;
+            ogs_assert(sbi_object);
+
+            sbi_object_id = sbi_xact->sbi_object_id;
+            ogs_assert(sbi_object_id >= OGS_MIN_POOL_ID &&
+                    sbi_object_id <= OGS_MAX_POOL_ID);
+
             ogs_sbi_xact_remove(sbi_xact);
 
-            ogs_error("Cannot receive SBI message");
+            sess = smf_sess_find_by_id(sbi_object_id);
+            if (!sess) {
+                ogs_error("Session has already been removed");
+                break;
+            }
+            smf_ue = smf_ue_find_by_id(sess->smf_ue_id);
+            ogs_assert(smf_ue);
+
+            ogs_error("[%s:%d] Cannot receive SBI message",
+                    smf_ue->supi, sess->psi);
             if (stream) {
                 ogs_assert(true ==
                     ogs_sbi_server_send_error(stream,
                         OGS_SBI_HTTP_STATUS_GATEWAY_TIMEOUT, NULL,
-                        "Cannot receive SBI message", NULL, NULL));
+                        "Cannot receive SBI message", smf_ue->supi, NULL));
             }
             break;
 

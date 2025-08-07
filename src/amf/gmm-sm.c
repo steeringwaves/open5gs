@@ -285,10 +285,10 @@ void gmm_state_de_registered(ogs_fsm_t *s, amf_event_t *e)
 
                 SWITCH(sbi_message->h.method)
                 CASE(OGS_SBI_HTTP_METHOD_POST)
-                    ogs_warn("[%s] Ignore SBI message", amf_ue->suci);
+                    ogs_error("[%s] Ignore SBI message", amf_ue->suci);
                     break;
                 CASE(OGS_SBI_HTTP_METHOD_PUT)
-                    ogs_warn("[%s] Ignore SBI message", amf_ue->suci);
+                    ogs_error("[%s] Ignore SBI message", amf_ue->suci);
                     break;
                 CASE(OGS_SBI_HTTP_METHOD_DELETE)
                     CLEAR_5G_AKA_CONFIRMATION(amf_ue);
@@ -343,7 +343,7 @@ void gmm_state_de_registered(ogs_fsm_t *s, amf_event_t *e)
             CASE(OGS_SBI_RESOURCE_NAME_5G_AKA)
             CASE(OGS_SBI_RESOURCE_NAME_5G_AKA_CONFIRMATION)
             CASE(OGS_SBI_RESOURCE_NAME_EAP_SESSION)
-                ogs_warn("[%s] Ignore SBI message", amf_ue->supi);
+                ogs_error("[%s] Ignore SBI message", amf_ue->supi);
                 break;
 
             DEFAULT
@@ -365,7 +365,7 @@ void gmm_state_de_registered(ogs_fsm_t *s, amf_event_t *e)
             CASE(OGS_SBI_RESOURCE_NAME_AM_DATA)
             CASE(OGS_SBI_RESOURCE_NAME_SMF_SELECT_DATA)
             CASE(OGS_SBI_RESOURCE_NAME_UE_CONTEXT_IN_SMF_DATA)
-                ogs_warn("[%s] Ignore SBI message", amf_ue->supi);
+                ogs_error("[%s] Ignore SBI message", amf_ue->supi);
                 break;
 
             CASE(OGS_SBI_RESOURCE_NAME_SDM_SUBSCRIPTIONS)
@@ -407,7 +407,7 @@ void gmm_state_de_registered(ogs_fsm_t *s, amf_event_t *e)
                     }
                     break;
                 DEFAULT
-                    ogs_warn("[%s] Ignore invalid HTTP method [%s]",
+                    ogs_error("[%s] Ignore invalid HTTP method [%s]",
                             amf_ue->suci, sbi_message->h.method);
                 END
                 break;
@@ -431,7 +431,7 @@ void gmm_state_de_registered(ogs_fsm_t *s, amf_event_t *e)
             CASE(OGS_SBI_RESOURCE_NAME_REGISTRATIONS)
                 SWITCH(sbi_message->h.method)
                 CASE(OGS_SBI_HTTP_METHOD_PUT)
-                    ogs_warn("[%s] Ignore SBI message", amf_ue->supi);
+                    ogs_error("[%s] Ignore SBI message", amf_ue->supi);
                     break;
                 CASE(OGS_SBI_HTTP_METHOD_PATCH)
                     SWITCH(sbi_message->h.resource.component[2])
@@ -486,7 +486,7 @@ void gmm_state_de_registered(ogs_fsm_t *s, amf_event_t *e)
                         }
                         break;
                     DEFAULT
-                        ogs_warn("Ignoring invalid resource name [%s]",
+                        ogs_error("Ignoring invalid resource name [%s]",
                                  sbi_message->h.resource.component[2]);
                     END
                     break;
@@ -510,7 +510,11 @@ void gmm_state_de_registered(ogs_fsm_t *s, amf_event_t *e)
             CASE(OGS_SBI_RESOURCE_NAME_POLICIES)
                 SWITCH(sbi_message->h.method)
                 CASE(OGS_SBI_HTTP_METHOD_POST)
-                    ogs_warn("[%s] Ignore SBI message", amf_ue->suci);
+                    if (sbi_message->res_status != OGS_SBI_HTTP_STATUS_CREATED) {
+                        ogs_error("[%s] HTTP response error [%d]",
+                                amf_ue->supi, sbi_message->res_status);
+                    }
+                    ogs_error("[%s] Ignore SBI message", amf_ue->suci);
                     break;
 
                 CASE(OGS_SBI_HTTP_METHOD_DELETE)
@@ -879,10 +883,10 @@ void gmm_state_registered(ogs_fsm_t *s, amf_event_t *e)
 
                 SWITCH(sbi_message->h.method)
                 CASE(OGS_SBI_HTTP_METHOD_POST)
-                    ogs_warn("[%s] Ignore SBI message", amf_ue->suci);
+                    ogs_error("[%s] Ignore SBI message", amf_ue->suci);
                     break;
                 CASE(OGS_SBI_HTTP_METHOD_PUT)
-                    ogs_warn("[%s] Ignore SBI message", amf_ue->suci);
+                    ogs_error("[%s] Ignore SBI message", amf_ue->suci);
                     break;
                 CASE(OGS_SBI_HTTP_METHOD_DELETE)
                     CLEAR_5G_AKA_CONFIRMATION(amf_ue);
@@ -937,7 +941,7 @@ void gmm_state_registered(ogs_fsm_t *s, amf_event_t *e)
             CASE(OGS_SBI_RESOURCE_NAME_5G_AKA)
             CASE(OGS_SBI_RESOURCE_NAME_5G_AKA_CONFIRMATION)
             CASE(OGS_SBI_RESOURCE_NAME_EAP_SESSION)
-                ogs_warn("[%s] Ignore SBI message", amf_ue->supi);
+                ogs_error("[%s] Ignore SBI message", amf_ue->supi);
                 break;
 
             DEFAULT
@@ -959,7 +963,7 @@ void gmm_state_registered(ogs_fsm_t *s, amf_event_t *e)
             CASE(OGS_SBI_RESOURCE_NAME_AM_DATA)
             CASE(OGS_SBI_RESOURCE_NAME_SMF_SELECT_DATA)
             CASE(OGS_SBI_RESOURCE_NAME_UE_CONTEXT_IN_SMF_DATA)
-                ogs_warn("[%s] Ignore SBI message", amf_ue->supi);
+                ogs_error("[%s] Ignore SBI message", amf_ue->supi);
                 break;
 
             CASE(OGS_SBI_RESOURCE_NAME_SDM_SUBSCRIPTIONS)
@@ -1031,7 +1035,7 @@ void gmm_state_registered(ogs_fsm_t *s, amf_event_t *e)
             CASE(OGS_SBI_RESOURCE_NAME_REGISTRATIONS)
                 SWITCH(sbi_message->h.method)
                 CASE(OGS_SBI_HTTP_METHOD_PUT)
-                    ogs_warn("[%s] Ignore SBI message", amf_ue->supi);
+                    ogs_error("[%s] Ignore SBI message", amf_ue->supi);
                     break;
                 CASE(OGS_SBI_HTTP_METHOD_PATCH)
                     SWITCH(sbi_message->h.resource.component[2])
@@ -1125,7 +1129,11 @@ void gmm_state_registered(ogs_fsm_t *s, amf_event_t *e)
             CASE(OGS_SBI_RESOURCE_NAME_POLICIES)
                 SWITCH(sbi_message->h.method)
                 CASE(OGS_SBI_HTTP_METHOD_POST)
-                    ogs_warn("[%s] Ignore SBI message", amf_ue->suci);
+                    if (sbi_message->res_status != OGS_SBI_HTTP_STATUS_CREATED) {
+                        ogs_error("[%s] HTTP response error [%d]",
+                                amf_ue->supi, sbi_message->res_status);
+                    }
+                    ogs_error("[%s] Ignore SBI message", amf_ue->suci);
                     break;
 
                 CASE(OGS_SBI_HTTP_METHOD_DELETE)
@@ -1312,7 +1320,15 @@ static void common_register_state(ogs_fsm_t *s, amf_event_t *e,
         ogs_assert(nas_message);
 
         ran_ue = ran_ue_find_by_id(amf_ue->ran_ue_id);
-        ogs_assert(ran_ue);
+        if (!ran_ue) {
+            ogs_error("No NG Context SUPI[%s] NAS-Type[%d] "
+                    "RAN-UE-ID[%d:%p]",
+                    amf_ue->supi, nas_message->gmm.h.message_type,
+                    amf_ue->ran_ue_id, ran_ue_find_by_id(amf_ue->ran_ue_id));
+            ogs_assert(e->pkbuf);
+            ogs_log_hexdump(OGS_LOG_ERROR, e->pkbuf->data, e->pkbuf->len);
+            break;
+        }
 
         h.type = e->nas.type;
 
@@ -1743,7 +1759,15 @@ void gmm_state_authentication(ogs_fsm_t *s, amf_event_t *e)
         ogs_assert(nas_message);
 
         ran_ue = ran_ue_find_by_id(amf_ue->ran_ue_id);
-        ogs_assert(ran_ue);
+        if (!ran_ue) {
+            ogs_error("No NG Context SUPI[%s] NAS-Type[%d] "
+                    "RAN-UE-ID[%d:%p]",
+                    amf_ue->supi, nas_message->gmm.h.message_type,
+                    amf_ue->ran_ue_id, ran_ue_find_by_id(amf_ue->ran_ue_id));
+            ogs_assert(e->pkbuf);
+            ogs_log_hexdump(OGS_LOG_ERROR, e->pkbuf->data, e->pkbuf->len);
+            break;
+        }
 
         h.type = e->nas.type;
 
@@ -2023,7 +2047,7 @@ void gmm_state_authentication(ogs_fsm_t *s, amf_event_t *e)
             CASE(OGS_SBI_RESOURCE_NAME_SMF_SELECT_DATA)
             CASE(OGS_SBI_RESOURCE_NAME_UE_CONTEXT_IN_SMF_DATA)
             CASE(OGS_SBI_RESOURCE_NAME_SDM_SUBSCRIPTIONS)
-                ogs_warn("[%s] Ignore SBI message", amf_ue->supi);
+                ogs_error("[%s] Ignore SBI message", amf_ue->supi);
                 break;
 
             DEFAULT
@@ -2102,7 +2126,15 @@ void gmm_state_security_mode(ogs_fsm_t *s, amf_event_t *e)
         ogs_assert(nas_message);
 
         ran_ue = ran_ue_find_by_id(amf_ue->ran_ue_id);
-        ogs_assert(ran_ue);
+        if (!ran_ue) {
+            ogs_error("No NG Context SUPI[%s] NAS-Type[%d] "
+                    "RAN-UE-ID[%d:%p]",
+                    amf_ue->supi, nas_message->gmm.h.message_type,
+                    amf_ue->ran_ue_id, ran_ue_find_by_id(amf_ue->ran_ue_id));
+            ogs_assert(e->pkbuf);
+            ogs_log_hexdump(OGS_LOG_ERROR, e->pkbuf->data, e->pkbuf->len);
+            break;
+        }
 
         h.type = e->nas.type;
 
@@ -2295,13 +2327,13 @@ void gmm_state_security_mode(ogs_fsm_t *s, amf_event_t *e)
 
                 SWITCH(sbi_message->h.method)
                 CASE(OGS_SBI_HTTP_METHOD_POST)
-                    ogs_warn("[%s] Ignore SBI message", amf_ue->suci);
+                    ogs_error("[%s] Ignore SBI message", amf_ue->suci);
                     break;
                 CASE(OGS_SBI_HTTP_METHOD_PUT)
-                    ogs_warn("[%s] Ignore SBI message", amf_ue->suci);
+                    ogs_error("[%s] Ignore SBI message", amf_ue->suci);
                     break;
                 CASE(OGS_SBI_HTTP_METHOD_DELETE)
-                    ogs_warn("[%s] Ignore SBI message", amf_ue->suci);
+                    ogs_error("[%s] Ignore SBI message", amf_ue->suci);
                     break;
                 DEFAULT
                     ogs_error("[%s] Invalid HTTP method [%s]",
@@ -2313,7 +2345,7 @@ void gmm_state_security_mode(ogs_fsm_t *s, amf_event_t *e)
             CASE(OGS_SBI_RESOURCE_NAME_5G_AKA)
             CASE(OGS_SBI_RESOURCE_NAME_5G_AKA_CONFIRMATION)
             CASE(OGS_SBI_RESOURCE_NAME_EAP_SESSION)
-                ogs_warn("[%s] Ignore SBI message", amf_ue->supi);
+                ogs_error("[%s] Ignore SBI message", amf_ue->supi);
                 break;
 
             DEFAULT
@@ -2476,13 +2508,13 @@ void gmm_state_initial_context_setup(ogs_fsm_t *s, amf_event_t *e)
 
                 SWITCH(sbi_message->h.method)
                 CASE(OGS_SBI_HTTP_METHOD_POST)
-                    ogs_warn("[%s] Ignore SBI message", amf_ue->suci);
+                    ogs_error("[%s] Ignore SBI message", amf_ue->suci);
                     break;
                 CASE(OGS_SBI_HTTP_METHOD_PUT)
-                    ogs_warn("[%s] Ignore SBI message", amf_ue->suci);
+                    ogs_error("[%s] Ignore SBI message", amf_ue->suci);
                     break;
                 CASE(OGS_SBI_HTTP_METHOD_DELETE)
-                    ogs_warn("[%s] Ignore SBI message", amf_ue->suci);
+                    ogs_error("[%s] Ignore SBI message", amf_ue->suci);
                     break;
                 DEFAULT
                     ogs_error("[%s] Invalid HTTP method [%s]",
@@ -2494,7 +2526,7 @@ void gmm_state_initial_context_setup(ogs_fsm_t *s, amf_event_t *e)
             CASE(OGS_SBI_RESOURCE_NAME_5G_AKA)
             CASE(OGS_SBI_RESOURCE_NAME_5G_AKA_CONFIRMATION)
             CASE(OGS_SBI_RESOURCE_NAME_EAP_SESSION)
-                ogs_warn("[%s] Ignore SBI message", amf_ue->supi);
+                ogs_error("[%s] Ignore SBI message", amf_ue->supi);
                 break;
 
             DEFAULT
@@ -2647,7 +2679,15 @@ void gmm_state_initial_context_setup(ogs_fsm_t *s, amf_event_t *e)
         ogs_assert(nas_message);
 
         ran_ue = ran_ue_find_by_id(amf_ue->ran_ue_id);
-        ogs_assert(ran_ue);
+        if (!ran_ue) {
+            ogs_error("No NG Context SUPI[%s] NAS-Type[%d] "
+                    "RAN-UE-ID[%d:%p]",
+                    amf_ue->supi, nas_message->gmm.h.message_type,
+                    amf_ue->ran_ue_id, ran_ue_find_by_id(amf_ue->ran_ue_id));
+            ogs_assert(e->pkbuf);
+            ogs_log_hexdump(OGS_LOG_ERROR, e->pkbuf->data, e->pkbuf->len);
+            break;
+        }
 
         h.type = e->nas.type;
 
@@ -2941,7 +2981,15 @@ void gmm_state_exception(ogs_fsm_t *s, amf_event_t *e)
         ogs_assert(nas_message);
 
         ran_ue = ran_ue_find_by_id(amf_ue->ran_ue_id);
-        ogs_assert(ran_ue);
+        if (!ran_ue) {
+            ogs_error("No NG Context SUPI[%s] NAS-Type[%d] "
+                    "RAN-UE-ID[%d:%p]",
+                    amf_ue->supi, nas_message->gmm.h.message_type,
+                    amf_ue->ran_ue_id, ran_ue_find_by_id(amf_ue->ran_ue_id));
+            ogs_assert(e->pkbuf);
+            ogs_log_hexdump(OGS_LOG_ERROR, e->pkbuf->data, e->pkbuf->len);
+            break;
+        }
 
         h.type = e->nas.type;
 
@@ -3059,7 +3107,27 @@ void gmm_state_exception(ogs_fsm_t *s, amf_event_t *e)
         ogs_assert(sbi_message);
 
         ran_ue_t *ran_ue = ran_ue_find_by_id(amf_ue->ran_ue_id);
-        ogs_assert(ran_ue);
+        if (!ran_ue) {
+            int i;
+            ogs_error("No NG Context SUPI[%s] Status[%d] RAN-UE-ID[%d:%p]",
+                    amf_ue->supi, sbi_message->res_status,
+                    amf_ue->ran_ue_id, ran_ue_find_by_id(amf_ue->ran_ue_id));
+
+            if (sbi_message->h.method)
+                ogs_error("    h.method[%s]", sbi_message->h.method);
+            if (sbi_message->h.uri)
+                ogs_error("    h.uri[%s]", sbi_message->h.uri);
+            if (sbi_message->h.service.name)
+                ogs_error("    h.service.name[%s]",
+                        sbi_message->h.service.name);
+            if (sbi_message->h.api.version)
+                ogs_error("    h.api.version[%s]", sbi_message->h.api.version);
+            for (i = 0; i < OGS_SBI_MAX_NUM_OF_RESOURCE_COMPONENT &&
+                        sbi_message->h.resource.component[i]; i++)
+                ogs_error("    h.resource.component[%s:%d]",
+                        sbi_message->h.resource.component[i], i);
+            break;
+        }
 
         SWITCH(sbi_message->h.service.name)
         CASE(OGS_SBI_SERVICE_NAME_NAUSF_AUTH)
@@ -3081,13 +3149,13 @@ void gmm_state_exception(ogs_fsm_t *s, amf_event_t *e)
 
                 SWITCH(sbi_message->h.method)
                 CASE(OGS_SBI_HTTP_METHOD_POST)
-                    ogs_warn("[%s] Ignore SBI message", amf_ue->suci);
+                    ogs_error("[%s] Ignore SBI message", amf_ue->suci);
                     break;
                 CASE(OGS_SBI_HTTP_METHOD_PUT)
-                    ogs_warn("[%s] Ignore SBI message", amf_ue->suci);
+                    ogs_error("[%s] Ignore SBI message", amf_ue->suci);
                     break;
                 CASE(OGS_SBI_HTTP_METHOD_DELETE)
-                    ogs_warn("[%s] Ignore SBI message", amf_ue->suci);
+                    ogs_error("[%s] Ignore SBI message", amf_ue->suci);
                     break;
                 DEFAULT
                     ogs_error("[%s] Invalid HTTP method [%s]",
@@ -3099,7 +3167,89 @@ void gmm_state_exception(ogs_fsm_t *s, amf_event_t *e)
             CASE(OGS_SBI_RESOURCE_NAME_5G_AKA)
             CASE(OGS_SBI_RESOURCE_NAME_5G_AKA_CONFIRMATION)
             CASE(OGS_SBI_RESOURCE_NAME_EAP_SESSION)
-                ogs_warn("[%s] Ignore SBI message", amf_ue->supi);
+                ogs_error("[%s] Ignore SBI message", amf_ue->supi);
+                break;
+
+            DEFAULT
+                ogs_error("Invalid resource name [%s]",
+                        sbi_message->h.resource.component[0]);
+                ogs_assert_if_reached();
+            END
+            break;
+
+        CASE(OGS_SBI_SERVICE_NAME_NUDM_UECM)
+            SWITCH(sbi_message->h.resource.component[1])
+            CASE(OGS_SBI_RESOURCE_NAME_REGISTRATIONS)
+                if (sbi_message->res_status != OGS_SBI_HTTP_STATUS_CREATED &&
+                    sbi_message->res_status != OGS_SBI_HTTP_STATUS_OK &&
+                    sbi_message->res_status != OGS_SBI_HTTP_STATUS_NO_CONTENT) {
+                    if (sbi_message->res_status ==
+                            OGS_SBI_HTTP_STATUS_NOT_FOUND) {
+                        ogs_warn("[%s] Cannot find SUCI [%d]",
+                            amf_ue->suci, sbi_message->res_status);
+                    } else {
+                        ogs_error("[%s] HTTP response error [%d]",
+                            amf_ue->suci, sbi_message->res_status);
+                    }
+                }
+
+                SWITCH(sbi_message->h.method)
+                CASE(OGS_SBI_HTTP_METHOD_PUT)
+                    ogs_error("[%s] Ignore SBI message", amf_ue->suci);
+                    break;
+                DEFAULT
+                    ogs_error("[%s] Invalid HTTP method [%s]",
+                            amf_ue->suci, sbi_message->h.method);
+                    ogs_assert_if_reached();
+                END
+                break;
+
+            DEFAULT
+                ogs_error("Invalid resource name [%s]",
+                        sbi_message->h.resource.component[1]);
+                ogs_assert_if_reached();
+            END
+            break;
+
+        CASE(OGS_SBI_SERVICE_NAME_NUDM_SDM)
+            if ((sbi_message->res_status != OGS_SBI_HTTP_STATUS_OK) &&
+                (sbi_message->res_status != OGS_SBI_HTTP_STATUS_CREATED) &&
+                (sbi_message->res_status != OGS_SBI_HTTP_STATUS_NO_CONTENT)) {
+                ogs_error("[%s] HTTP response error [%d]",
+                          amf_ue->supi, sbi_message->res_status);
+            }
+
+            SWITCH(sbi_message->h.resource.component[1])
+            CASE(OGS_SBI_RESOURCE_NAME_AM_DATA)
+            CASE(OGS_SBI_RESOURCE_NAME_SMF_SELECT_DATA)
+            CASE(OGS_SBI_RESOURCE_NAME_UE_CONTEXT_IN_SMF_DATA)
+            CASE(OGS_SBI_RESOURCE_NAME_SDM_SUBSCRIPTIONS)
+                ogs_error("[%s] Ignore SBI message", amf_ue->supi);
+                break;
+
+            DEFAULT
+                ogs_error("Invalid resource name [%s]",
+                        sbi_message->h.resource.component[1]);
+                ogs_assert_if_reached();
+            END
+            break;
+
+        CASE(OGS_SBI_SERVICE_NAME_NPCF_AM_POLICY_CONTROL)
+            SWITCH(sbi_message->h.resource.component[0])
+            CASE(OGS_SBI_RESOURCE_NAME_POLICIES)
+                SWITCH(sbi_message->h.method)
+                CASE(OGS_SBI_HTTP_METHOD_POST)
+                    if (sbi_message->res_status != OGS_SBI_HTTP_STATUS_CREATED) {
+                        ogs_error("[%s] HTTP response error [%d]",
+                                amf_ue->supi, sbi_message->res_status);
+                    }
+                    ogs_error("[%s] Ignore SBI message", amf_ue->suci);
+                    break;
+
+                DEFAULT
+                    ogs_error("Unknown method [%s]", sbi_message->h.method);
+                    ogs_assert_if_reached();
+                END
                 break;
 
             DEFAULT
