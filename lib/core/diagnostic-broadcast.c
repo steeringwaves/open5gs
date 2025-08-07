@@ -1,3 +1,4 @@
+#include "diagnostic-broadcast.h"
 #include <arpa/inet.h>
 #include <stdarg.h>
 #include <stdio.h>
