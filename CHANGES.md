@@ -42,5 +42,12 @@ diagnostic_broadcast("{\"Command\":\"MME Terminate\"}");
           diagnostic_broadcast("{\"Command\":\"Attach\",\"IMSI\":\"%s\", \"IMEI\":\"%s\"}",
             smf_ue->imsi_bcd,
             mme_ue->imeisv_bcd);
+
+diagnostic_broadcast("{\"Command\":\"UE Release\",\"IMSI\":\"%s\"}", mme_ue->imsi_bcd);
+diagnostic_broadcast("{\"Command\":\"UE Release\",\"SUCI\":\"%s\"}", amf_ue->suci ? amf_ue->suci : "Unknown");
+
+diagnostic_broadcast("{\"Command\":\"eNB Connect\",\"Address\":\"%s\"}", OGS_ADDR(enb->sctp.addr, buf));
+
+
 ```
 
