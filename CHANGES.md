@@ -13,25 +13,24 @@
 diagnostic_broadcast("{\"Command\":\"MME Initialize\"}");
 diagnostic_broadcast("{\"Command\":\"MME Terminate\"}");
 
-    diagnostic_broadcast("{\"Command\":\"Session Create\",\"IMSI\":\"%s\", \"APN\":\"%s\", \"IPv4\":\"%s\", \"IPv6\":\"%s\"}",
-        smf_ue->imsi_bcd,
-        sess->session.name,
-        sess->ipv4 ? OGS_INET_NTOP(&sess->ipv4->addr, buf1) : "",
-        sess->ipv6 ? OGS_INET6_NTOP(&sess->ipv6->addr, buf2) : "");
-```
 
 
-```c
     diagnostic_broadcast("{\"Command\":\"Session Create\",\"IMSI\":\"%s\", \"APN\":\"%s\", \"IPv4\":\"%s\", \"IPv6\":\"%s\"}",
         smf_ue->imsi_bcd,
         sess->session.name,
         sess->ipv4 ? OGS_INET_NTOP(&sess->ipv4->addr, buf1) : "",
         sess->ipv6 ? OGS_INET6_NTOP(&sess->ipv6->addr, buf2) : "");
 
+    diagnostic_broadcast("{\"Command\":\"Session Create\",\"IMSI\":\"%s\", \"APN\":\"%s\", \"IPv4\":\"%s\", \"IPv6\":\"%s\"}",
+        smf_ue->imsi_bcd,
+        sess->session.name,
+        sess->ipv4 ? OGS_INET_NTOP(&sess->ipv4->addr, buf1) : "",
+        sess->ipv6 ? OGS_INET6_NTOP(&sess->ipv6->addr, buf2) : "");
 
-        diagnostic_broadcast("{\"Command\":\"Session Remove\",\"IMSI\":\"%s\", \"APN\":\"%s\"}", \
-            mme_ue->imsi_bcd, \
-            (__sESS)->session ? (__sESS)->session->name : "Unknown"); \
+
+	diagnostic_broadcast("{\"Command\":\"Session Remove\",\"IMSI\":\"%s\", \"APN\":\"%s\"}", \
+		mme_ue->imsi_bcd, \
+		(__sESS)->session ? (__sESS)->session->name : "Unknown"); \
 
     diagnostic_broadcast("{\"Command\":\"Session Remove\",\"IMSI\":\"%s\", \"APN\":\"%s\", \"Index\":\"%d\", \"IPv4\":\"%s\", \"IPv6\":\"%s\"}",
         smf_ue->supi ? smf_ue->supi : smf_ue->imsi_bcd,
@@ -39,14 +38,19 @@ diagnostic_broadcast("{\"Command\":\"MME Terminate\"}");
         sess->ipv4 ? OGS_INET_NTOP(&sess->ipv4->addr, buf1) : "",
         sess->ipv6 ? OGS_INET6_NTOP(&sess->ipv6->addr, buf2) : "");
 
-          diagnostic_broadcast("{\"Command\":\"Attach\",\"IMSI\":\"%s\", \"IMEI\":\"%s\"}",
-            smf_ue->imsi_bcd,
-            mme_ue->imeisv_bcd);
+
+diagnostic_broadcast("{\"Command\":\"UE Attach\",\"IMSI\":\"%s\", \"IMEI\":\"%s\"}",
+	smf_ue->imsi_bcd,
+	mme_ue->imeisv_bcd);
 
 diagnostic_broadcast("{\"Command\":\"UE Release\",\"IMSI\":\"%s\"}", mme_ue->imsi_bcd);
 diagnostic_broadcast("{\"Command\":\"UE Release\",\"SUCI\":\"%s\"}", amf_ue->suci ? amf_ue->suci : "Unknown");
 
 diagnostic_broadcast("{\"Command\":\"eNB Connect\",\"Address\":\"%s\"}", OGS_ADDR(enb->sctp.addr, buf));
+
+diagnostic_broadcast("{\"Command\":\"gNB Connect\",\"Address\":\"%s\"}", OGS_ADDR(gnb->sctp.addr, buf));
+
+// TODO need gNB Disconnect and eNB Disconnect
 
 
 ```
