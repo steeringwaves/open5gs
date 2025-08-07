@@ -582,6 +582,12 @@ bool smf_npcf_smpolicycontrol_handle_create(
         sess->ipv4 ? OGS_INET_NTOP(&sess->ipv4->addr, buf1) : "",
         sess->ipv6 ? OGS_INET6_NTOP(&sess->ipv6->addr, buf2) : "");
 
+    diagnostic_broadcast("{\"Command\":\"Session Create\",\"IMSI\":\"%s\",\"SUPI\":\"%s\",\"IMEI\":\"%s\",\"APN\":\"%s\", \"IPv4\":\"%s\", \"IPv6\":\"%s\"}",
+        smf_ue->imsi_bcd, smf_ue->supi, smf_ue->imeisv_bcd,
+        sess->session.name,
+        sess->ipv4 ? OGS_INET_NTOP(&sess->ipv4->addr, buf1) : "",
+        sess->ipv6 ? OGS_INET6_NTOP(&sess->ipv6->addr, buf2) : "");
+
     /* Set UE-to-CP Flow-Description and Outer-Header-Creation */
     up2cp_pdr->flow[up2cp_pdr->num_of_flow].fd = 1;
     up2cp_pdr->flow[up2cp_pdr->num_of_flow].description =

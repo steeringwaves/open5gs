@@ -1417,6 +1417,13 @@ void ran_ue_remove(ran_ue_t *ran_ue)
 
     gnb = amf_gnb_find_by_id(ran_ue->gnb_id);
 
+    if (gnb) {
+        amf_ue_t *amf_ue = NULL;
+        amf_ue = amf_ue_find_by_id(ran_ue->amf_ue_id);
+
+        if (amf_ue) diagnostic_broadcast("{\"Command\":\"UE Release\",\"IMSI\":\"%s\"}", amf_ue->imsi_bcd);
+    }
+
     if (gnb) ogs_list_remove(&gnb->ran_ue_list, ran_ue);
 
     ogs_assert(ran_ue->t_ng_holding);

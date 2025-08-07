@@ -27,6 +27,11 @@ diagnostic_broadcast("{\"Command\":\"MME Terminate\"}");
         sess->ipv4 ? OGS_INET_NTOP(&sess->ipv4->addr, buf1) : "",
         sess->ipv6 ? OGS_INET6_NTOP(&sess->ipv6->addr, buf2) : "");
 
+    diagnostic_broadcast("{\"Command\":\"Session Create\",\"IMSI\":\"%s\",\"SUPI\":\"%s\",\"IMEI\":\"%s\",\"APN\":\"%s\", \"IPv4\":\"%s\", \"IPv6\":\"%s\"}",
+        smf_ue->imsi_bcd, smf_ue->supi, smf_ue->imeisv_bcd,
+        sess->session.name,
+        sess->ipv4 ? OGS_INET_NTOP(&sess->ipv4->addr, buf1) : "",
+        sess->ipv6 ? OGS_INET6_NTOP(&sess->ipv6->addr, buf2) : "");
 
 	diagnostic_broadcast("{\"Command\":\"Session Remove\",\"IMSI\":\"%s\", \"APN\":\"%s\"}", \
 		mme_ue->imsi_bcd, \
@@ -44,7 +49,7 @@ diagnostic_broadcast("{\"Command\":\"UE Attach\",\"IMSI\":\"%s\", \"IMEI\":\"%s\
 	mme_ue->imeisv_bcd);
 
 diagnostic_broadcast("{\"Command\":\"UE Release\",\"IMSI\":\"%s\"}", mme_ue->imsi_bcd);
-diagnostic_broadcast("{\"Command\":\"UE Release\",\"SUCI\":\"%s\"}", amf_ue->suci ? amf_ue->suci : "Unknown");
+diagnostic_broadcast("{\"Command\":\"UE Release\",\"SUCI\":\"%s\",\"IMEI\":\"%s\"}", amf_ue->suci ? amf_ue->suci : "Unknown", amf_ue->imeisv_bcd);
 
 // eNB
 diagnostic_broadcast("{\"Command\":\"eNB Connect\",\"Address\":\"%s\"}", OGS_ADDR(enb->sctp.addr, buf));

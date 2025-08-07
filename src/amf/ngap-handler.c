@@ -1736,7 +1736,7 @@ void ngap_handle_ue_context_release_action(ran_ue_t *ran_ue)
             (long long)ran_ue->amf_ue_ngap_id);
     if (amf_ue) {
         ogs_info("    SUCI[%s]", amf_ue->suci ? amf_ue->suci : "Unknown");
-        diagnostic_broadcast("{\"Command\":\"UE Release\",\"SUCI\":\"%s\"}", amf_ue->suci ? amf_ue->suci : "Unknown");
+        diagnostic_broadcast("{\"Command\":\"UE Release\",\"SUCI\":\"%s\",\"IMEI\":\"%s\"}", amf_ue->suci ? amf_ue->suci : "Unknown", amf_ue->imeisv_bcd);
 
         /*
          * An assert occurs when a NAS message retransmission occurs.

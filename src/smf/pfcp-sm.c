@@ -468,8 +468,8 @@ static void pfcp_restoration(ogs_pfcp_node_t *node)
                         sess->ipv6 ?
                             OGS_INET6_NTOP(&sess->ipv6->addr, buf2) : "");
 
-                    diagnostic_broadcast("{\"Command\":\"Session Create\",\"IMSI\":\"%s\", \"APN\":\"%s\", \"IPv4\":\"%s\", \"IPv6\":\"%s\"}",
-                        smf_ue->imsi_bcd,
+                    diagnostic_broadcast("{\"Command\":\"Session Create\",\"IMSI\":\"%s\",\"SUPI\":\"%s\",\"IMEI\":\"%s\",\"APN\":\"%s\", \"IPv4\":\"%s\", \"IPv6\":\"%s\"}",
+                        smf_ue->imsi_bcd, smf_ue->supi, smf_ue->imeisv_bcd,
                         sess->session.name,
                         sess->ipv4 ? OGS_INET_NTOP(&sess->ipv4->addr, buf1) : "",
                         sess->ipv6 ? OGS_INET6_NTOP(&sess->ipv6->addr, buf2) : "");
@@ -486,8 +486,8 @@ static void pfcp_restoration(ogs_pfcp_node_t *node)
                         sess->ipv6 ?
                             OGS_INET6_NTOP(&sess->ipv6->addr, buf2) : "");
 
-                    diagnostic_broadcast("{\"Command\":\"Session Create\",\"SUPI\":\"%s\", \"APN\":\"%s\", \"IPv4\":\"%s\", \"IPv6\":\"%s\"}",
-                        smf_ue->supi,
+                    diagnostic_broadcast("{\"Command\":\"Session Create\",\"IMSI\":\"%s\",\"SUPI\":\"%s\",\"IMEI\":\"%s\",\"APN\":\"%s\", \"IPv4\":\"%s\", \"IPv6\":\"%s\"}",
+                        smf_ue->imsi_bcd, smf_ue->supi, smf_ue->imeisv_bcd,
                         sess->session.name,
                         sess->ipv4 ? OGS_INET_NTOP(&sess->ipv4->addr, buf1) : "",
                         sess->ipv6 ? OGS_INET6_NTOP(&sess->ipv6->addr, buf2) : "");
