@@ -27,8 +27,9 @@ void diagnostic_broadcast_internal(const char *fmt, ...) {
 
   // Create and send UDP packet
   int sock = socket(AF_INET, SOCK_DGRAM, 0);
-  if (sock < 0)
+  if (sock < 0) {
     return;
+  }
 
   struct sockaddr_in dest = {
       .sin_family = AF_INET,

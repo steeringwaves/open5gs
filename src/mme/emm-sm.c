@@ -1547,7 +1547,7 @@ void emm_state_initial_context_setup(ogs_fsm_t *s, mme_event_t *e)
         case OGS_NAS_EPS_ATTACH_COMPLETE:
           ogs_info("[%s] Attach complete: IMEI: %s", mme_ue->imsi_bcd, mme_ue->imeisv_bcd);
           diagnostic_broadcast("{\"Command\":\"Attach\",\"IMSI\":\"%s\", \"IMEI\":\"%s\"}",
-            smf_ue->imsi_bcd,
+            mme_ue->imsi_bcd,
             mme_ue->imeisv_bcd);
 
         /*
