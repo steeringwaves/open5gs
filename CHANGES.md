@@ -9,6 +9,10 @@
 - 
 
 ```c
+
+diagnostic_broadcast("{\"Command\":\"MME Initialize\"}");
+diagnostic_broadcast("{\"Command\":\"MME Terminate\"}");
+
     diagnostic_broadcast("{\"Command\":\"Session Create\",\"IMSI\":\"%s\", \"APN\":\"%s\", \"IPv4\":\"%s\", \"IPv6\":\"%s\"}",
         smf_ue->imsi_bcd,
         sess->session.name,
