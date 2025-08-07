@@ -300,8 +300,10 @@ uint8_t smf_gn_handle_create_pdp_context_request(
         sess->ipv4 ? OGS_INET_NTOP(&sess->ipv4->addr, buf1) : "",
         sess->ipv6 ? OGS_INET6_NTOP(&sess->ipv6->addr, buf2) : "");
     
-    diagnostic_broadcast("{\"Command\":\"Session Create\",\"IMSI\":\"%s\",\"SUPI\":\"%s\",\"IMEI\":\"%s\",\"APN\":\"%s\", \"IPv4\":\"%s\", \"IPv6\":\"%s\"}",
-        smf_ue->imsi_bcd, smf_ue->supi ? smf_ue->supi : "", smf_ue->imeisv_bcd,
+    diagnostic_broadcast("{\"Command\":\"Session Create\",\"IMSI\":\"%s\",\"IMEI\":\"%s\",\"SUPI\":\"%s\",\"APN\":\"%s\", \"IPv4\":\"%s\", \"IPv6\":\"%s\"}",
+        smf_ue->imsi_bcd,
+        smf_ue->imeisv_bcd ? smf_ue->imeisv_bcd : "",
+        smf_ue->supi ? smf_ue->supi : "",
         sess->session.name,
         sess->ipv4 ? OGS_INET_NTOP(&sess->ipv4->addr, buf1) : "",
         sess->ipv6 ? OGS_INET6_NTOP(&sess->ipv6->addr, buf2) : "");
