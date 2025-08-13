@@ -8,11 +8,13 @@
 	"settings": {
 		"editor.tabSize": 4,
 		"[yaml]": {
-			"editor.formatOnType": true,
-			"editor.formatOnSave": true
+			"editor.formatOnType": false,
+			"editor.formatOnSave": false
 		},
 		"files.exclude": {
-			".git": true
+			".git": true,
+			".cache": true,
+			"build": true,
 		},
 		"clangd.arguments": [
 			"--background-index"
@@ -25,18 +27,13 @@
 			"*.hpp": "cpp"
 		},
 		"editor.formatOnSave": false,
-		"eslint.alwaysShowStatus": true,
-		"eslint.lintTask.enable": true,
-		"eslint.format.enable": true,
-		"eslint.onIgnoredFiles": "warn",
-		"eslint.debug": true,
 		"[c]": {
-			"editor.formatOnType": true,
-			"editor.formatOnSave": true
+			"editor.formatOnType": false,
+			"editor.formatOnSave": false
 		},
 		"[cpp]": {
-			"editor.formatOnType": true,
-			"editor.formatOnSave": true
+			"editor.formatOnType": false,
+			"editor.formatOnSave": false
 		},
 		"C_Cpp.autocomplete": "disabled",
 		"C_Cpp.errorSquiggles": "disabled",
