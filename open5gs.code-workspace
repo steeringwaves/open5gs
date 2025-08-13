@@ -1,0 +1,47 @@
+{
+	"folders": [
+		{
+			"name": "",
+			"path": "./"
+		}
+	],
+	"settings": {
+		"editor.tabSize": 4,
+		"[yaml]": {
+			"editor.formatOnType": true,
+			"editor.formatOnSave": true
+		},
+		"files.exclude": {
+			".git": true
+		},
+		"clangd.arguments": [
+			"--background-index"
+		],
+		"files.associations": {
+			"*.c": "c",
+			"*.h": "c",
+			"*.cc": "cpp",
+			"*.cpp": "cpp",
+			"*.hpp": "cpp"
+		},
+		"editor.formatOnSave": false,
+		"eslint.alwaysShowStatus": true,
+		"eslint.lintTask.enable": true,
+		"eslint.format.enable": true,
+		"eslint.onIgnoredFiles": "warn",
+		"eslint.debug": true,
+		"[c]": {
+			"editor.formatOnType": true,
+			"editor.formatOnSave": true
+		},
+		"[cpp]": {
+			"editor.formatOnType": true,
+			"editor.formatOnSave": true
+		},
+		"C_Cpp.autocomplete": "disabled",
+		"C_Cpp.errorSquiggles": "disabled",
+		"C_Cpp.formatting": "disabled",
+		"C_Cpp.intelliSenseEngine": "disabled",
+		"git.ignoreLimitWarning": true,
+	}
+}

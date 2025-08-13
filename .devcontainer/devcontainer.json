@@ -1,0 +1,49 @@
+// For format details, see https://aka.ms/devcontainer.json. For config options, see the
+// README at: https://github.com/devcontainers/templates/tree/main/src/universal
+{
+	"name": "open5gs Dev Container",
+	"build": {
+		"dockerfile": "Dockerfile"
+	},
+	"customizations": {
+		// Configure properties specific to VS Code.
+		"vscode": {
+			// Add the IDs of extensions you want installed when the container is created.
+			"extensions": [
+				"streetsidesoftware.code-spell-checker",
+				"DavidAnson.vscode-markdownlint",
+				"emmanuelbeziat.vscode-great-icons",
+				"eamodio.gitlens",
+				"llvm-vs-code-extensions.vscode-clangd",
+				"ms-python.python",
+				"ms-vscode.cpptools",
+				"VisualStudioExptTeam.vscodeintellicode",
+				"wayou.vscode-todo-highlight",
+				"yzane.markdown-pdf",
+				"redhat.vscode-yaml",
+				"wmaurer.change-case",
+				"ccls-project.ccls",
+				"13xforever.language-x86-64-assembly",
+				"twxs.cmake",
+				"josetr.cmake-language-support-vscode",
+				"mhutchie.git-graph",
+				"donjayamanne.githistory",
+				"GitHub.copilot",
+				"GitHub.copilot-chat",
+				"eriklynd.json-tools",
+				"chrislajoie.vscode-modelines",
+				"ms-vscode.makefile-tools"
+			]
+		}
+	}
+	// Features to add to the dev container. More info: https://containers.dev/features.
+	// "features": {},
+	// Use 'forwardPorts' to make a list of ports inside the container available locally.
+	// "forwardPorts": [],
+	// Use 'postCreateCommand' to run commands after the container is created.
+	// "postCreateCommand": "uname -a",
+	// Configure tool-specific properties.
+	// "customizations": {},
+	// Uncomment to connect as root instead. More info: https://aka.ms/dev-containers-non-root.
+	// "remoteUser": "root"
+}
