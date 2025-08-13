@@ -1,5 +1,13 @@
 # open5gs modifications
 
+## Developing
+
+Open `open5gs.code-workspace` and use the provided `.devcontainer`
+
+Then open a terminal and run `meson build` to setup the `build/` directory.
+
+## Changes
+
 - `Attach complete`
 - `Removed Session: UE` or `MME_SESS_CLEAR`
 
