@@ -1791,6 +1791,14 @@ void smf_sess_remove(smf_sess_t *sess)
             sess->session.name, sess->psi,
             sess->ipv4 ? OGS_INET_NTOP(&sess->ipv4->addr, buf1) : "",
             sess->ipv6 ? OGS_INET6_NTOP(&sess->ipv6->addr, buf2) : "");
+    
+    diagnostic_broadcast("{\"Command\":\"Session Remove\",\"IMSI\":\"%s\",\"IMEI\":\"%s\",\"SUPI\":\"%s\",\"APN\":\"%s\",\"Index\":\"%d\",\"IPv4\":\"%s\",\"IPv6\":\"%s\"}",
+        smf_ue->imsi_bcd,
+        smf_ue->imeisv_bcd ? smf_ue->imeisv_bcd : "",
+        smf_ue->supi ? smf_ue->supi : "",
+        sess->session.name, sess->psi,
+        sess->ipv4 ? OGS_INET_NTOP(&sess->ipv4->addr, buf1) : "",
+        sess->ipv6 ? OGS_INET6_NTOP(&sess->ipv6->addr, buf2) : "");
 
     ogs_list_remove(&smf_ue->sess_list, sess);
 

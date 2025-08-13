@@ -1287,6 +1287,9 @@ void amf_gnb_remove(amf_gnb_t *gnb)
     ogs_assert(gnb);
     ogs_assert(gnb->sctp.sock);
 
+    char buf[OGS_ADDRSTRLEN];
+    diagnostic_broadcast("{\"Command\":\"gNB Disconnect\",\"Address\":\"%s\"}", OGS_ADDR(gnb->sctp.addr, buf));
+
     ogs_list_remove(&self.gnb_list, gnb);
 
     memset(&e, 0, sizeof(e));
@@ -1417,6 +1420,13 @@ void ran_ue_remove(ran_ue_t *ran_ue)
     ogs_assert(ran_ue);
 
     gnb = amf_gnb_find_by_id(ran_ue->gnb_id);
+
+    if (gnb) {
+        amf_ue_t *amf_ue = NULL;
+        amf_ue = amf_ue_find_by_id(ran_ue->amf_ue_id);
+
+        if (amf_ue) diagnostic_broadcast("{\"Command\":\"UE Release\",\"IMEI\":\"%s\",\"SUPI\":\"%s\",\"SUCI\":\"%s\"}", amf_ue->imeisv_bcd ? amf_ue->imeisv_bcd : "", amf_ue->supi ? amf_ue->supi : "", amf_ue->suci ? amf_ue->suci : "");
+    }
 
     if (gnb) ogs_list_remove(&gnb->ran_ue_list, ran_ue);
 
