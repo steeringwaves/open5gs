@@ -4,7 +4,7 @@
 
 Open `open5gs.code-workspace` and use the provided `.devcontainer`
 
-Then open a terminal and run `meson build && ninja -C build` to setup the `build/` directory.
+Then open a terminal and run `meson setup --wipe build && ninja -C build` to setup the `build/` directory.
 
 ## Changes
 
