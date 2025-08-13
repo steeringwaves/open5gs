@@ -8,6 +8,10 @@ Then open a terminal and run `meson build` to setup the `build/` directory.
 
 ## Changes
 
+```sh
+grep -R 'diagnostic_broadcast(' ./src 2>/dev/null
+```
+
 - `Attach complete`
 - `Removed Session: UE` or `MME_SESS_CLEAR`
 
