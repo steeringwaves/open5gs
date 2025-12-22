@@ -262,8 +262,6 @@ void emm_state_registered(ogs_fsm_t *s, mme_event_t *e)
          * detach timer such that the sum of the timer values is greater than
          * timer T3346.
          */
-            ogs_debug("[%s] Starting Implicit Detach timer",
-                mme_ue->imsi_bcd);
             ogs_timer_start(mme_ue->t_implicit_detach.timer,
                 ogs_time_from_sec(mme_self()->time.t3412.value + 240));
             break;
@@ -280,11 +278,8 @@ void emm_state_registered(ogs_fsm_t *s, mme_event_t *e)
             if (MME_CURRENT_P_TMSI_IS_AVAILABLE(mme_ue)) {
                 ogs_assert(OGS_OK == sgsap_send_detach_indication(mme_ue));
             } else {
-                enb_ue_t *enb_ue = enb_ue_find_by_id(mme_ue->enb_ue_id);
-                if (enb_ue)
-                    mme_send_delete_session_or_detach(enb_ue, mme_ue);
-                else
-                    ogs_error("ENB-S1 Context has already been removed");
+                mme_send_delete_session_or_detach(
+                        enb_ue_find_by_id(mme_ue->enb_ue_id), mme_ue);
             }
 
             OGS_FSM_TRAN(s, &emm_state_de_registered);
@@ -675,6 +670,21 @@ static void common_register_state(ogs_fsm_t *s, mme_event_t *e,
              * 10. UplinkNASTransport + Tracking area update complete (Target)
              */
 
+            /* Save tau-request message */
+            mme_ue->tracking_area_update_request_presencemask =
+                message->emm.tracking_area_update_request.presencemask;
+            mme_ue->tracking_area_update_request_ebcs_value =
+                message->emm.tracking_area_update_request.
+                    eps_bearer_context_status.value;
+
+            /* Determine S1AP procedure and store it for reuse */
+            mme_ue->tracking_area_update_accept_proc =
+                S1AP_ProcedureCode_id_downlinkNASTransport;
+            if (e->s1ap_code == S1AP_ProcedureCode_id_initialUEMessage &&
+                mme_ue->nas_eps.update.active_flag)
+                mme_ue->tracking_area_update_accept_proc =
+                    S1AP_ProcedureCode_id_InitialContextSetup;
+
             /* Update CSMAP from Tracking area update request */
             mme_ue->csmap = mme_csmap_find_by_tai(&mme_ue->tai);
             if (mme_ue->csmap &&
@@ -685,80 +695,45 @@ static void common_register_state(ogs_fsm_t *s, mme_event_t *e,
                  mme_ue->nas_eps.update.value ==
                  OGS_NAS_EPS_UPDATE_TYPE_COMBINED_TA_LA_UPDATING_WITH_IMSI_ATTACH)) {
 
-                if (e->s1ap_code == S1AP_ProcedureCode_id_initialUEMessage)
-                    mme_ue->tracking_area_update_request_type =
-                        MME_TAU_TYPE_INITIAL_UE_MESSAGE;
-                else if (e->s1ap_code ==
-                        S1AP_ProcedureCode_id_uplinkNASTransport)
-                    mme_ue->tracking_area_update_request_type =
-                        MME_TAU_TYPE_UPLINK_NAS_TRANPORT;
-                else {
-                    ogs_error("Invalid Procedure Code[%d]", (int)e->s1ap_code);
-                    break;
-                }
-
                 ogs_assert(OGS_OK ==
                     sgsap_send_location_update_request(mme_ue));
 
             } else {
 
-                if (e->s1ap_code == S1AP_ProcedureCode_id_initialUEMessage) {
-                    ogs_debug("    Initial UE Message");
-                    if (mme_ue->nas_eps.update.active_flag) {
+                if (mme_ue->nas_eps.update.active_flag) {
 
-    /*
-     * TS33.401
-     * 7 Security procedures between UE and EPS access network elements
-     * 7.2 Handling of user-related keys in E-UTRAN
-     * 7.2.7 Key handling for the TAU procedure when registered in E-UTRAN
-     *
-     * If the "active flag" is set in the TAU request message or
-     * the MME chooses to establish radio bearers when there is pending downlink
-     * UP data or pending downlink signalling, radio bearers will be established
-     * as part of the TAU procedure and a KeNB derivation is necessary.
-     */
-                        ogs_kdf_kenb(mme_ue->kasme, mme_ue->ul_count.i32,
-                                mme_ue->kenb);
-                        ogs_kdf_nh_enb(mme_ue->kasme, mme_ue->kenb, mme_ue->nh);
-                        mme_ue->nhcc = 1;
+/*
+ * TS33.401
+ * 7 Security procedures between UE and EPS access network elements
+ * 7.2 Handling of user-related keys in E-UTRAN
+ * 7.2.7 Key handling for the TAU procedure when registered in E-UTRAN
+ *
+ * If the "active flag" is set in the TAU request message or
+ * the MME chooses to establish radio bearers when there is pending downlink
+ * UP data or pending downlink signalling, radio bearers will be established
+ * as part of the TAU procedure and a KeNB derivation is necessary.
+ */
+                    ogs_kdf_kenb(mme_ue->kasme, mme_ue->ul_count.i32,
+                            mme_ue->kenb);
+                    ogs_kdf_nh_enb(mme_ue->kasme, mme_ue->kenb, mme_ue->nh);
+                    mme_ue->nhcc = 1;
 
-                        r = nas_eps_send_tau_accept(mme_ue,
-                                S1AP_ProcedureCode_id_InitialContextSetup);
-                        ogs_expect(r == OGS_OK);
-                        ogs_assert(r != OGS_ERROR);
-                    } else {
-                        r = nas_eps_send_tau_accept(mme_ue,
-                                S1AP_ProcedureCode_id_downlinkNASTransport);
-                        ogs_expect(r == OGS_OK);
-                        ogs_assert(r != OGS_ERROR);
-                    }
-                } else if (e->s1ap_code ==
-                        S1AP_ProcedureCode_id_uplinkNASTransport) {
-                    ogs_debug("    Uplink NAS Transport");
-                    r = nas_eps_send_tau_accept(mme_ue,
-                            S1AP_ProcedureCode_id_downlinkNASTransport);
-                    ogs_expect(r == OGS_OK);
-                    ogs_assert(r != OGS_ERROR);
-                } else {
-                    ogs_error("Invalid Procedure Code[%d]", (int)e->s1ap_code);
-                    break;
+                    ogs_info("[%s] KDF update(active_flag=1)",
+                            mme_ue->imsi_bcd);
                 }
 
-        /*
-         * When active_flag is 0, check if the P-TMSI has been updated.
-         * If the P-TMSI has changed, wait to receive the TAU Complete message
-         * from the UE before sending the UEContextReleaseCommand.
-         *
-         * This ensures that the UE has acknowledged the new P-TMSI,
-         * allowing the TAU procedure to complete successfully
-         * and maintaining synchronization between the UE and the network.
-         */
-                if (!mme_ue->nas_eps.update.active_flag &&
-                    !MME_NEXT_P_TMSI_IS_AVAILABLE(mme_ue)) {
-                    enb_ue->relcause.group = S1AP_Cause_PR_nas;
-                    enb_ue->relcause.cause = S1AP_CauseNas_normal_release;
-                    mme_send_release_access_bearer_or_ue_context_release(
-                            enb_ue);
+                /* check BCS regardless of active_flag */
+                if (mme_ue->tracking_area_update_request_presencemask &
+                    OGS_NAS_EPS_TRACKING_AREA_UPDATE_REQUEST_EPS_BEARER_CONTEXT_STATUS_TYPE) {
+                    ogs_info("[%s] TAU accept(active_flag=%d, BCS check)",
+                        mme_ue->imsi_bcd,
+                        mme_ue->nas_eps.update.active_flag);
+                    mme_send_delete_session_or_tau_accept(enb_ue, mme_ue);
+                } else {
+                    ogs_info("[%s] TAU accept(active_flag=%d, No BCS)",
+                        mme_ue->imsi_bcd,
+                        mme_ue->nas_eps.update.active_flag);
+                    mme_send_tau_accept_and_check_release(enb_ue, mme_ue);
                 }
             }
 
@@ -1081,7 +1056,7 @@ static void common_register_state(ogs_fsm_t *s, mme_event_t *e,
 
 void emm_state_authentication(ogs_fsm_t *s, mme_event_t *e)
 {
-    int r, rv;
+    int r, rv, xact_count;
     mme_ue_t *mme_ue = NULL;
     enb_ue_t *enb_ue = NULL;
     ogs_nas_eps_message_t *message = NULL;
@@ -1117,6 +1092,8 @@ void emm_state_authentication(ogs_fsm_t *s, mme_event_t *e)
             ogs_log_hexdump(OGS_LOG_ERROR, e->pkbuf->data, e->pkbuf->len);
             break;
         }
+
+        xact_count = mme_ue_xact_count(mme_ue, OGS_GTP_LOCAL_ORIGINATOR);
 
         switch (message->emm.h.message_type) {
         case OGS_NAS_EPS_AUTHENTICATION_RESPONSE:
@@ -1182,7 +1159,15 @@ void emm_state_authentication(ogs_fsm_t *s, mme_event_t *e)
                 break;
             }
 
-            mme_s6a_send_air(enb_ue, mme_ue, NULL);
+            mme_gtp_send_delete_all_sessions(enb_ue, mme_ue,
+                OGS_GTP_DELETE_SEND_AUTHENTICATION_REQUEST);
+
+            if (!MME_SESSION_RELEASE_PENDING(mme_ue) &&
+                mme_ue_xact_count(mme_ue, OGS_GTP_LOCAL_ORIGINATOR) ==
+                    xact_count) {
+                mme_s6a_send_air(enb_ue, mme_ue, NULL);
+            }
+
             OGS_FSM_TRAN(s, &emm_state_authentication);
             break;
         case OGS_NAS_EPS_EMM_STATUS:
@@ -1270,7 +1255,7 @@ void emm_state_authentication(ogs_fsm_t *s, mme_event_t *e)
 
 void emm_state_security_mode(ogs_fsm_t *s, mme_event_t *e)
 {
-    int r, rv;
+    int r, rv, xact_count;
     mme_ue_t *mme_ue = NULL;
     enb_ue_t *enb_ue = NULL;
     ogs_nas_eps_message_t *message = NULL;
@@ -1309,6 +1294,8 @@ void emm_state_security_mode(ogs_fsm_t *s, mme_event_t *e)
             ogs_log_hexdump(OGS_LOG_ERROR, e->pkbuf->data, e->pkbuf->len);
             break;
         }
+
+        xact_count = mme_ue_xact_count(mme_ue, OGS_GTP_LOCAL_ORIGINATOR);
 
         if (message->emm.h.security_header_type
                 == OGS_NAS_SECURITY_HEADER_FOR_SERVICE_REQUEST_MESSAGE) {
@@ -1425,7 +1412,15 @@ void emm_state_security_mode(ogs_fsm_t *s, mme_event_t *e)
                 break;
             }
 
-            mme_s6a_send_air(enb_ue, mme_ue, NULL);
+            mme_gtp_send_delete_all_sessions(enb_ue, mme_ue,
+                OGS_GTP_DELETE_SEND_AUTHENTICATION_REQUEST);
+
+            if (!MME_SESSION_RELEASE_PENDING(mme_ue) &&
+                mme_ue_xact_count(mme_ue, OGS_GTP_LOCAL_ORIGINATOR) ==
+                    xact_count) {
+                mme_s6a_send_air(enb_ue, mme_ue, NULL);
+            }
+
             OGS_FSM_TRAN(s, &emm_state_authentication);
             break;
         case OGS_NAS_EPS_TRACKING_AREA_UPDATE_REQUEST:

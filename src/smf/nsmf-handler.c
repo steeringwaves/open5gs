@@ -43,7 +43,7 @@ bool smf_nsmf_handle_create_sm_context(
     char *fqdn = NULL;
     uint16_t fqdn_port = 0;
     ogs_sockaddr_t *addr = NULL, *addr6 = NULL;
-    char *home_network_domain = NULL;
+    char *dnn_oi = NULL;
 
     OpenAPI_sm_context_create_data_t *SmContextCreateData = NULL;
     OpenAPI_nr_location_t *NrLocation = NULL;
@@ -353,22 +353,20 @@ bool smf_nsmf_handle_create_sm_context(
      * the full DNN in LBO and non-roaming scenarios. If the Operator Identifier
      * is absent, the serving core network operator shall be assumed.
      */
-    home_network_domain =
-        ogs_home_network_domain_from_fqdn(SmContextCreateData->dnn);
+    dnn_oi = ogs_dnn_oi_from_fqdn(SmContextCreateData->dnn);
 
-    if (home_network_domain) {
-        char dnn_network_identifer[OGS_MAX_DNN_LEN+1];
+    if (dnn_oi) {
+        char dnn_ni[OGS_MAX_DNN_LEN+1];
         uint16_t mcc = 0, mnc = 0;
 
-        ogs_assert(home_network_domain > SmContextCreateData->dnn);
+        ogs_assert(dnn_oi > SmContextCreateData->dnn);
 
-        ogs_cpystrn(dnn_network_identifer, SmContextCreateData->dnn,
-            ogs_min(OGS_MAX_DNN_LEN,
-                home_network_domain - SmContextCreateData->dnn));
+        ogs_cpystrn(dnn_ni, SmContextCreateData->dnn,
+            ogs_min(OGS_MAX_DNN_LEN, dnn_oi - SmContextCreateData->dnn));
 
         if (sess->session.name)
             ogs_free(sess->session.name);
-        sess->session.name = ogs_strdup(dnn_network_identifer);
+        sess->session.name = ogs_strdup(dnn_ni);
         ogs_assert(sess->session.name);
 
         if (sess->full_dnn)
@@ -491,8 +489,14 @@ bool smf_nsmf_handle_create_sm_context(
     /* Select UPF based on UE Location Information */
     smf_sess_select_upf(sess);
 
+    /* Check if UPF selection was successful */
+    if (!sess->pfcp_node) {
+        ogs_error("[%s:%d] No UPF available for session",
+                  smf_ue->supi, sess->psi);
+        return false;
+    }
+
     /* Check if selected UPF is associated with SMF */
-    ogs_assert(sess->pfcp_node);
     if (!OGS_FSM_CHECK(&sess->pfcp_node->sm, smf_pfcp_state_associated)) {
         ogs_error("[%s:%d] No associated UPF", smf_ue->supi, sess->psi);
         return false;
@@ -1249,7 +1253,7 @@ bool smf_nsmf_handle_create_data_in_hsmf(
     char *fqdn = NULL;
     uint16_t fqdn_port = 0;
     ogs_sockaddr_t *addr = NULL, *addr6 = NULL;
-    char *home_network_domain = NULL;
+    char *dnn_oi = NULL;
 
     OpenAPI_pdu_session_create_data_t *PduSessionCreateData = NULL;
     OpenAPI_nr_location_t *NrLocation = NULL;
@@ -1319,21 +1323,19 @@ bool smf_nsmf_handle_create_data_in_hsmf(
         return false;
     }
 
-    home_network_domain =
-        ogs_home_network_domain_from_fqdn(PduSessionCreateData->dnn);
+    dnn_oi = ogs_dnn_oi_from_fqdn(PduSessionCreateData->dnn);
 
-    if (home_network_domain) {
-        char dnn_network_identifer[OGS_MAX_DNN_LEN+1];
+    if (dnn_oi) {
+        char dnn_ni[OGS_MAX_DNN_LEN+1];
 
-        ogs_assert(home_network_domain > PduSessionCreateData->dnn);
+        ogs_assert(dnn_oi > PduSessionCreateData->dnn);
 
-        ogs_cpystrn(dnn_network_identifer, PduSessionCreateData->dnn,
-            ogs_min(OGS_MAX_DNN_LEN,
-                home_network_domain - PduSessionCreateData->dnn));
+        ogs_cpystrn(dnn_ni, PduSessionCreateData->dnn,
+            ogs_min(OGS_MAX_DNN_LEN, dnn_oi - PduSessionCreateData->dnn));
 
         if (sess->session.name)
             ogs_free(sess->session.name);
-        sess->session.name = ogs_strdup(dnn_network_identifer);
+        sess->session.name = ogs_strdup(dnn_ni);
         ogs_assert(sess->session.name);
 
         if (sess->full_dnn)

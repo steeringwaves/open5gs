@@ -1373,6 +1373,12 @@ ran_ue_t *ran_ue_add(amf_gnb_t *gnb, uint64_t ran_ue_ngap_id)
 
     ogs_assert(gnb);
 
+    if ((gnb->max_num_of_ostreams - 1) < 1) {
+        ogs_error("gnb->max_num_of_ostreams too small (%d)",
+                gnb->max_num_of_ostreams);
+        return NULL;
+    }
+
     ogs_pool_id_calloc(&ran_ue_pool, &ran_ue);
     if (ran_ue == NULL) {
         ogs_error("Could not allocate ran_ue context from pool");
@@ -2535,7 +2541,9 @@ int amf_find_served_tai(ogs_5gs_tai_t *nr_tai)
             ogs_assert(list1->tai[j].type == OGS_TAI1_TYPE);
             ogs_assert(list1->tai[j].num <= OGS_MAX_NUM_OF_TAI);
 
-            if (list1->tai[j].tac.v <= nr_tai->tac.v &&
+            if (memcmp(&list1->tai[j].plmn_id,
+                    &nr_tai->plmn_id, OGS_PLMN_ID_LEN) == 0 &&
+                list1->tai[j].tac.v <= nr_tai->tac.v &&
                 nr_tai->tac.v < (list1->tai[j].tac.v+list1->tai[j].num))
                 return i;
         }

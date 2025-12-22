@@ -382,6 +382,11 @@ static void fill_e_rab_to_be_setup(
                 (long long)bearer->qos.gbr.downlink,
                 (long long)bearer->qos.gbr.uplink);
 
+            ogs_assert(bearer->qos.mbr.downlink <= OGS_MAX_BITRATE_S1AP);
+            ogs_assert(bearer->qos.mbr.uplink <= OGS_MAX_BITRATE_S1AP);
+            ogs_assert(bearer->qos.gbr.downlink <= OGS_MAX_BITRATE_S1AP);
+            ogs_assert(bearer->qos.gbr.uplink <= OGS_MAX_BITRATE_S1AP);
+
             gbrQosInformation =
                     CALLOC(1, sizeof(struct S1AP_GBR_QosInformation));
             asn_uint642INTEGER(&gbrQosInformation->e_RAB_MaximumBitrateDL,
@@ -581,7 +586,7 @@ ogs_pkbuf_t *s1ap_build_initial_context_setup_request(
          */
         ogs_list_for_each(&mme_ue->sess_list, sess) {
             ogs_list_for_each(&sess->bearer_list, bearer) {
-                if (OGS_FSM_CHECK(&bearer->sm, esm_state_inactive)) {
+                if (!OGS_FSM_CHECK(&bearer->sm, esm_state_active)) {
                     ogs_warn("No active EPS bearer [%d]", bearer->ebi);
                     ogs_warn("    IMSI[%s] NAS-EPS Type[%d] "
                             "ENB_UE_S1AP_ID[%d] MME_UE_S1AP_ID[%d]",
@@ -636,6 +641,9 @@ ogs_pkbuf_t *s1ap_build_initial_context_setup_request(
                     ogs_error("    IN-ACTIVE");
                 else if (OGS_FSM_CHECK(&bearer->sm, esm_state_active))
                     ogs_error("    ACTIVE");
+                else if (OGS_FSM_CHECK(&bearer->sm,
+                            esm_state_pdn_will_disconnect))
+                    ogs_error("    PDN will disconnect");
                 else
                     ogs_error("    OTHER STATE");
 
@@ -643,6 +651,9 @@ ogs_pkbuf_t *s1ap_build_initial_context_setup_request(
                         bearer->ebi, bearer->qos.index, bearer->sgw_s1u_teid);
             }
         }
+        ogs_error("Before ogs_s1ap_free()");
+        ogs_s1ap_free(&pdu);
+        ogs_error("After ogs_s1ap_free()");
         return NULL;
     }
 
@@ -1153,6 +1164,11 @@ ogs_pkbuf_t *s1ap_build_e_rab_setup_request(
         if (bearer->qos.mbr.downlink && bearer->qos.mbr.uplink &&
             bearer->qos.gbr.downlink && bearer->qos.gbr.uplink) {
 
+            ogs_assert(bearer->qos.mbr.downlink <= OGS_MAX_BITRATE_S1AP);
+            ogs_assert(bearer->qos.mbr.uplink <= OGS_MAX_BITRATE_S1AP);
+            ogs_assert(bearer->qos.gbr.downlink <= OGS_MAX_BITRATE_S1AP);
+            ogs_assert(bearer->qos.gbr.uplink <= OGS_MAX_BITRATE_S1AP);
+
             gbrQosInformation = CALLOC(1, sizeof(S1AP_GBR_QosInformation_t));
             asn_uint642INTEGER(&gbrQosInformation->e_RAB_MaximumBitrateDL,
                     bearer->qos.mbr.downlink);
@@ -1297,6 +1313,10 @@ ogs_pkbuf_t *s1ap_build_e_rab_modify_request(
         ogs_assert(bearer->qos.mbr.uplink);
         ogs_assert(bearer->qos.gbr.downlink);
         ogs_assert(bearer->qos.gbr.uplink);
+        ogs_assert(bearer->qos.mbr.downlink <= OGS_MAX_BITRATE_S1AP);
+        ogs_assert(bearer->qos.mbr.uplink <= OGS_MAX_BITRATE_S1AP);
+        ogs_assert(bearer->qos.gbr.downlink <= OGS_MAX_BITRATE_S1AP);
+        ogs_assert(bearer->qos.gbr.uplink <= OGS_MAX_BITRATE_S1AP);
 
         gbrQosInformation =
                 CALLOC(1, sizeof(S1AP_GBR_QosInformation_t));
@@ -2349,6 +2369,15 @@ ogs_pkbuf_t *s1ap_build_handover_request(
             S1AP_E_RABToBeSetupItemHOReq_t *e_rab = NULL;
             S1AP_GBR_QosInformation_t *gbrQosInformation = NULL;
 
+            if (!OGS_FSM_CHECK(&bearer->sm, esm_state_active)) {
+                ogs_warn("No active EPS bearer [%d]", bearer->ebi);
+                ogs_warn("    IMSI[%s] NAS-EPS Type[%d] "
+                        "ENB_UE_S1AP_ID[%d] MME_UE_S1AP_ID[%d]",
+                        mme_ue->imsi_bcd, mme_ue->nas_eps.type,
+                        target_ue->enb_ue_s1ap_id, target_ue->mme_ue_s1ap_id);
+                continue;
+            }
+
             item = CALLOC(1, sizeof(S1AP_E_RABToBeSetupItemHOReqIEs_t));
             ASN_SEQUENCE_ADD(&E_RABToBeSetupListHOReq->list, item);
 
@@ -2377,6 +2406,10 @@ ogs_pkbuf_t *s1ap_build_handover_request(
                 ogs_assert(bearer->qos.mbr.uplink);
                 ogs_assert(bearer->qos.gbr.downlink);
                 ogs_assert(bearer->qos.gbr.uplink);
+                ogs_assert(bearer->qos.mbr.downlink <= OGS_MAX_BITRATE_S1AP);
+                ogs_assert(bearer->qos.mbr.uplink <= OGS_MAX_BITRATE_S1AP);
+                ogs_assert(bearer->qos.gbr.downlink <= OGS_MAX_BITRATE_S1AP);
+                ogs_assert(bearer->qos.gbr.uplink <= OGS_MAX_BITRATE_S1AP);
 
                 gbrQosInformation =
                         CALLOC(1, sizeof(struct S1AP_GBR_QosInformation));
@@ -2399,6 +2432,31 @@ ogs_pkbuf_t *s1ap_build_handover_request(
                     bearer->sgw_s1u_teid, &e_rab->gTP_TEID);
             ogs_debug("    SGW-S1U-TEID[%d]", bearer->sgw_s1u_teid);
         }
+    }
+
+    if (!E_RABToBeSetupListHOReq->list.count) {
+        ogs_list_for_each(&mme_ue->sess_list, sess) {
+            ogs_error("    APN[%s]",
+                    sess->session ? sess->session->name : "Unknown");
+            ogs_list_for_each(&sess->bearer_list, bearer) {
+                if (OGS_FSM_CHECK(&bearer->sm, esm_state_inactive))
+                    ogs_error("    IN-ACTIVE");
+                else if (OGS_FSM_CHECK(&bearer->sm, esm_state_active))
+                    ogs_error("    ACTIVE");
+                else if (OGS_FSM_CHECK(&bearer->sm,
+                            esm_state_pdn_will_disconnect))
+                    ogs_error("    PDN will disconnect");
+                else
+                    ogs_error("    OTHER STATE");
+
+                ogs_error("    EBI[%d] QCI[%d] SGW-S1U-TEID[%d]",
+                        bearer->ebi, bearer->qos.index, bearer->sgw_s1u_teid);
+            }
+        }
+        ogs_error("Before ogs_s1ap_free()");
+        ogs_s1ap_free(&pdu);
+        ogs_error("After ogs_s1ap_free()");
+        return NULL;
     }
 
     ogs_s1ap_buffer_to_OCTET_STRING(

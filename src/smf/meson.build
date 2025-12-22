@@ -70,6 +70,7 @@ libsmf_sources = files('''
     ngap-path.h
     local-path.h
     metrics.h
+    pdu-info.h
 
     init.c
     event.c
@@ -112,6 +113,8 @@ libsmf_sources = files('''
     ngap-path.c
     local-path.c
     metrics.c
+    pdu-info.c
+    ../../lib/metrics/prometheus/json_pager.c
 '''.split())
 
 libsmf = static_library('smf',
