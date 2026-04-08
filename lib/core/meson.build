@@ -223,6 +223,7 @@ endif
 configure_file(output : 'core-config.h', configuration : ogs_libcore_conf)
 
 libcore_sources = files('''
+    diagnostic-broadcast.h
     ogs-core.h
 
     ogs-compat.h
@@ -264,6 +265,7 @@ libcore_sources = files('''
     ogs-file.h
     abts.h
 
+    diagnostic-broadcast.c
     ogs-abort.c
     ogs-errno.c
     ogs-strings.c

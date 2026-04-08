@@ -940,6 +940,8 @@ void amf_state_operational(ogs_fsm_t *s, amf_event_t *e)
 
         ogs_info("gNB-N2[%s] max_num_of_ostreams : %d",
             OGS_ADDR(gnb->sctp.addr, buf), gnb->max_num_of_ostreams);
+        
+        diagnostic_broadcast("{\"Command\":\"gNB Connect\",\"Address\":\"%s\"}", OGS_ADDR(gnb->sctp.addr, buf));
 
         break;
 
