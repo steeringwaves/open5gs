@@ -334,10 +334,10 @@ bool pcf_sbi_send_smpolicycontrol_create_response(
     ogs_assert(pcf_ue_sm->supi);
     ogs_assert(sess->dnn);
 
-    rv = pcf_db_qos_data(
+    rv = pcf_get_session_data(
             pcf_ue_sm->supi,
             sess->home.presence == true ? &sess->home.plmn_id : NULL,
-            &sess->s_nssai, sess->dnn, &session_data);
+            &sess->s_nssai, sess->dnn, &session_data, 0);
     if (rv != OGS_OK) {
         strerror = ogs_msprintf("[%s:%d] Cannot find SUPI in DB",
                 pcf_ue_sm->supi, sess->psi);

@@ -17,6 +17,7 @@ head_inline: "<style> ul { padding-bottom: 1em; } </style>"
   - [VoLTE Setup with Kamailio IMS and Open5GS](tutorial/02-VoLTE-setup)
   - [Dockerized VoLTE Setup](tutorial/03-VoLTE-dockerized)
   - [Roaming](tutorial/05-roaming)
+  - [infoAPI for accessing UE, gNB/eNB, and session data](tutorial/07-infoAPI-UE-gNB-session-data)
 
 - In the lab
   - [A Demonstration of 30 Gbps Load Testing for Accelerated UPF with Open5gs](https://nextepc.com/technology)
@@ -50,6 +51,7 @@ head_inline: "<style> ul { padding-bottom: 1em; } </style>"
   - [5G Frame Routing](https://futuredon.medium.com/5g-frame-routing-6e34d8587123)
   - [5G SCTP LoadBalancer Using LoxiLB](https://futuredon.medium.com/5g-sctp-loadbalancer-using-loxilb-b525198a9103)([Video Link](https://youtu.be/k3ICc7MXcC8))
   - [5G Roaming With Mutual TLS](https://futuredon.medium.com/5g-roaming-with-mutual-tls-1468d109129c)
+  - [Building a Cloud-Native 5G Roaming Architecture with Open5GS](https://futuredon.medium.com/building-a-cloud-native-5g-roaming-architecture-with-open5gs-cert-manager-and-openbao-supporting-08168a937ddc)
 
 - @nickvsnetworking
   - [My first 5G Core : Open5GS and UERANSIM](http://nickvsnetworking.com/my-first-5g-core-open5gs-and-ueransim/)
@@ -70,7 +72,8 @@ head_inline: "<style> ul { padding-bottom: 1em; } </style>"
   - [Select UPF based on S-NSSAI](https://github.com/s5uishida/open5gs_5gc_ueransim_snssai_upf_sample_config)
   - [SCP Indirect communication Model C](https://github.com/s5uishida/open5gs_5gc_ueransim_scp_model_c_sample_config)
   - [Monitoring Metrics with Prometheus](https://github.com/s5uishida/open5gs_5gc_ueransim_metrics_sample_config)
-  - [Frame Routing](https://github.com/s5uishida/open5gs_5gc_ueransim_framed_routing_sample_config)
+  - [Frame Routing with Open5GS UPF](https://github.com/s5uishida/open5gs_5gc_ueransim_framed_routing_sample_config)
+  - [Frame Routing with OAI-CN5G-UPF](https://github.com/s5uishida/open5gs_5gc_ueransim_oai_upf_framed_routing_sample_config)
   - [VPP-UPF with DPDK](https://github.com/s5uishida/open5gs_5gc_ueransim_vpp_upf_dpdk_sample_config)
   - [UERANSIM with eUPF(eBPF/XDP UPF)](https://github.com/s5uishida/open5gs_5gc_ueransim_eupf_sample_config)
   - [srsRAN with eUPF(eBPF/XDP UPF)](https://github.com/s5uishida/open5gs_epc_srsran_eupf_sample_config)
@@ -83,6 +86,9 @@ head_inline: "<style> ul { padding-bottom: 1em; } </style>"
   - [Open5GS and OAI-GNB](https://gradiant.github.io/5g-charts/open5gs-oaignb.html)
   - [Open5GS and srsenb](https://gradiant.github.io/5g-charts/open5gs-srsenb.html)
   - [Open5GS with SCP(Service Communication Proxy](https://gradiant.github.io/5g-charts/open5gs-scp.html)
+
+- @gradiant operator
+  - [Open5GS Operator](https://github.com/Gradiant/open5gs-operator)
 
 - @loxilb
   - [Exploring 5G SCP with Open5GS and LoxiLB](https://dev.to/nikhilmalik/5g-service-communication-proxy-with-loxilb-4242)

@@ -1373,6 +1373,12 @@ ran_ue_t *ran_ue_add(amf_gnb_t *gnb, uint64_t ran_ue_ngap_id)
 
     ogs_assert(gnb);
 
+    if ((gnb->max_num_of_ostreams - 1) < 1) {
+        ogs_error("gnb->max_num_of_ostreams too small (%d)",
+                gnb->max_num_of_ostreams);
+        return NULL;
+    }
+
     ogs_pool_id_calloc(&ran_ue_pool, &ran_ue);
     if (ran_ue == NULL) {
         ogs_error("Could not allocate ran_ue context from pool");
@@ -2382,10 +2388,12 @@ void amf_sess_remove(amf_sess_t *sess)
 
     if (sess->nssf.nsi_id)
         ogs_free(sess->nssf.nsi_id);
-    if (sess->nssf.nrf.id)
-        ogs_free(sess->nssf.nrf.id);
+    if (sess->nssf.nrf_uri)
+        ogs_free(sess->nssf.nrf_uri);
     if (sess->nssf.nrf.client)
         ogs_sbi_client_remove(sess->nssf.nrf.client);
+    if (sess->nssf.hnrf_uri)
+        ogs_free(sess->nssf.hnrf_uri);
 
     ogs_pool_id_free(&amf_sess_pool, sess);
 
@@ -2420,28 +2428,6 @@ amf_ue_t *amf_ue_find_by_id(ogs_pool_id_t id)
 amf_sess_t *amf_sess_find_by_id(ogs_pool_id_t id)
 {
     return ogs_pool_find_by_id(&amf_sess_pool, id);
-}
-
-void amf_sbi_select_nf(
-        ogs_sbi_object_t *sbi_object,
-        ogs_sbi_service_type_e service_type,
-        OpenAPI_nf_type_e requester_nf_type,
-        ogs_sbi_discovery_option_t *discovery_option)
-{
-    OpenAPI_nf_type_e target_nf_type = OpenAPI_nf_type_NULL;
-    ogs_sbi_nf_instance_t *nf_instance = NULL;
-
-    ogs_assert(sbi_object);
-    ogs_assert(service_type);
-    target_nf_type = ogs_sbi_service_type_to_nf_type(service_type);
-    ogs_assert(target_nf_type);
-    ogs_assert(requester_nf_type);
-
-    nf_instance = ogs_sbi_nf_instance_find_by_discovery_param(
-                    target_nf_type, requester_nf_type, discovery_option);
-    if (nf_instance)
-        OGS_SBI_SETUP_NF_INSTANCE(
-                sbi_object->service_type_array[service_type], nf_instance);
 }
 
 int amf_sess_xact_count(amf_ue_t *amf_ue)
@@ -2555,7 +2541,9 @@ int amf_find_served_tai(ogs_5gs_tai_t *nr_tai)
             ogs_assert(list1->tai[j].type == OGS_TAI1_TYPE);
             ogs_assert(list1->tai[j].num <= OGS_MAX_NUM_OF_TAI);
 
-            if (list1->tai[j].tac.v <= nr_tai->tac.v &&
+            if (memcmp(&list1->tai[j].plmn_id,
+                    &nr_tai->plmn_id, OGS_PLMN_ID_LEN) == 0 &&
+                list1->tai[j].tac.v <= nr_tai->tac.v &&
                 nr_tai->tac.v < (list1->tai[j].tac.v+list1->tai[j].num))
                 return i;
         }

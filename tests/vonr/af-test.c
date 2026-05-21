@@ -60,7 +60,7 @@ static void test1_func(abts_case *tc, void *data)
     mobile_identity_suci.protection_scheme_id = OGS_PROTECTION_SCHEME_NULL;
     mobile_identity_suci.home_network_pki_value = 0;
 
-    test_ue = test_ue_add_by_suci(&mobile_identity_suci, "0000203190");
+    test_ue = test_ue_add_by_suci(&mobile_identity_suci, "0000000001");
     ogs_assert(test_ue);
 
     test_ue->nr_cgi.cell_id = 0x40001;
@@ -740,7 +740,7 @@ static void test2_func(abts_case *tc, void *data)
     mobile_identity_suci.protection_scheme_id = OGS_PROTECTION_SCHEME_NULL;
     mobile_identity_suci.home_network_pki_value = 0;
 
-    test_ue = test_ue_add_by_suci(&mobile_identity_suci, "0000203190");
+    test_ue = test_ue_add_by_suci(&mobile_identity_suci, "0000000002");
     ogs_assert(test_ue);
 
     test_ue->nr_cgi.cell_id = 0x40001;
@@ -1215,7 +1215,7 @@ static void test3_func(abts_case *tc, void *data)
     mobile_identity_suci.protection_scheme_id = OGS_PROTECTION_SCHEME_NULL;
     mobile_identity_suci.home_network_pki_value = 0;
 
-    test_ue = test_ue_add_by_suci(&mobile_identity_suci, "0000203190");
+    test_ue = test_ue_add_by_suci(&mobile_identity_suci, "0000000003");
     ogs_assert(test_ue);
 
     test_ue->nr_cgi.cell_id = 0x40001;
@@ -1670,7 +1670,7 @@ static void test4_func(abts_case *tc, void *data)
     mobile_identity_suci.protection_scheme_id = OGS_PROTECTION_SCHEME_NULL;
     mobile_identity_suci.home_network_pki_value = 0;
 
-    test_ue = test_ue_add_by_suci(&mobile_identity_suci, "0000203190");
+    test_ue = test_ue_add_by_suci(&mobile_identity_suci, "0000000004");
     ogs_assert(test_ue);
 
     test_ue->nr_cgi.cell_id = 0x40001;
@@ -2296,7 +2296,7 @@ static void test5_func(abts_case *tc, void *data)
     mobile_identity_suci.protection_scheme_id = OGS_PROTECTION_SCHEME_NULL;
     mobile_identity_suci.home_network_pki_value = 0;
 
-    test_ue = test_ue_add_by_suci(&mobile_identity_suci, "0000203190");
+    test_ue = test_ue_add_by_suci(&mobile_identity_suci, "0000000005");
     ogs_assert(test_ue);
 
     test_ue->nr_cgi.cell_id = 0x40001;
@@ -3013,7 +3013,7 @@ static void test6_func(abts_case *tc, void *data)
     mobile_identity_suci.protection_scheme_id = OGS_PROTECTION_SCHEME_NULL;
     mobile_identity_suci.home_network_pki_value = 0;
 
-    test_ue = test_ue_add_by_suci(&mobile_identity_suci, "0000203190");
+    test_ue = test_ue_add_by_suci(&mobile_identity_suci, "0000000006");
     ogs_assert(test_ue);
 
     test_ue->nr_cgi.cell_id = 0x40001;
@@ -3550,7 +3550,7 @@ static void test7_func(abts_case *tc, void *data)
     mobile_identity_suci.protection_scheme_id = OGS_PROTECTION_SCHEME_NULL;
     mobile_identity_suci.home_network_pki_value = 0;
 
-    test_ue = test_ue_add_by_suci(&mobile_identity_suci, "0000203190");
+    test_ue = test_ue_add_by_suci(&mobile_identity_suci, "0000000007");
     ogs_assert(test_ue);
 
     test_ue->nr_cgi.cell_id = 0x40001;
@@ -3966,6 +3966,18 @@ static void test7_func(abts_case *tc, void *data)
     test_ue_remove(test_ue);
 }
 
+#if !HOME_ROUTED_ROAMING_TEST
+/**
+ * test8_func:
+ *   - Simulates absence of N2 Resource Release Ack (step 8)
+ *     and PDU Session Release Accept (step 11) from gNB/UE.
+ *   - In Home Routed Roaming, V-SMF will not send the
+ *     Nsmf_PDUSession_Update Response (step 14), causing
+ *     the SBI client to timeout after 10 seconds.
+ *   - Subsequent deregistration triggers a PFCP deactivation
+ *     modification, but UPF has no session, leading to
+ *     a No Context error.
+ */
 static void test8_func(abts_case *tc, void *data)
 {
     int rv;
@@ -4003,7 +4015,7 @@ static void test8_func(abts_case *tc, void *data)
     mobile_identity_suci.protection_scheme_id = OGS_PROTECTION_SCHEME_NULL;
     mobile_identity_suci.home_network_pki_value = 0;
 
-    test_ue = test_ue_add_by_suci(&mobile_identity_suci, "0000203190");
+    test_ue = test_ue_add_by_suci(&mobile_identity_suci, "0000000008");
     ogs_assert(test_ue);
 
     test_ue->nr_cgi.cell_id = 0x40001;
@@ -4327,12 +4339,19 @@ static void test8_func(abts_case *tc, void *data)
     /* Clear Test UE Context */
     test_ue_remove(test_ue);
 }
+#endif
 
 
 abts_suite *test_af(abts_suite *suite)
 {
     suite = ADD_SUITE(suite)
 
+/**
+ * abts_suite test_af:
+ *   - Always run test1_func through test7_func.
+ *   - Conditionally include test8_func based on
+ *     HOME_ROUTED_ROAMING_TEST flag.
+ */
     abts_run_test(suite, test1_func, NULL);
     abts_run_test(suite, test2_func, NULL);
     abts_run_test(suite, test3_func, NULL);
@@ -4340,7 +4359,9 @@ abts_suite *test_af(abts_suite *suite)
     abts_run_test(suite, test5_func, NULL);
     abts_run_test(suite, test6_func, NULL);
     abts_run_test(suite, test7_func, NULL);
+#if !HOME_ROUTED_ROAMING_TEST
     abts_run_test(suite, test8_func, NULL);
+#endif
 
     return suite;
 }

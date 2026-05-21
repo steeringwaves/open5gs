@@ -1,4 +1,4 @@
-process.env.DB_URI = process.env.DB_URI || 'mongodb://localhost/open5gs';
+process.env.DB_URI = process.env.DB_URI || 'mongodb://127.0.0.1/open5gs';
 
 const _hostname = process.env.HOSTNAME || 'localhost';
 const port = process.env.PORT || 9999;
@@ -23,7 +23,11 @@ const passport = require('passport');
 const LocalStrategy = require('passport-local').Strategy;
 
 const csrf = require('lusca').csrf();
-const secret = process.env.SECRET_KEY || 'change-me';
+
+require('./ensure-secret')();
+
+const secret = process.env.SECRET_KEY;
+
 
 const api = require('./routes');
 

@@ -100,6 +100,8 @@ typedef struct mme_context_s {
     ogs_list_t      csmap_list;     /* TAI-LAI Map List */
     ogs_list_t      hssmap_list;    /* PLMN HSS Map List */
 
+    ogs_list_t      emerg_list;     /* Emergency number list */
+
     /* Served GUMME */
     int             num_of_served_gummei;
     served_gummei_t served_gummei[OGS_MAX_NUM_OF_SERVED_GUMMEI];
@@ -163,6 +165,10 @@ typedef struct mme_context_s {
             ogs_time_t value;       /* Timer Value(Seconds) */
         } t3402, t3412, t3423;
     } time;
+
+    struct {
+        const char *dnn;            /* Emergency APN */
+    } emergency;
 } mme_context_t;
 
 typedef struct mme_sgsn_route_s {
@@ -266,6 +272,15 @@ typedef struct mme_enb_s {
     ogs_list_t      enb_ue_list;
 
 } mme_enb_t;
+
+typedef struct mme_emerg_s {
+    ogs_lnode_t     lnode;
+    ogs_pool_id_t   id;
+
+    uint8_t         categories; /* Service categories */
+    const char      *digits;    /* Emergency number */
+
+} mme_emerg_t;
 
 struct enb_ue_s {
     ogs_lnode_t     lnode;
@@ -431,10 +446,10 @@ struct mme_ue_s {
         ogs_nas_detach_type_t detach;
     } nas_eps;
 
-#define MME_TAU_TYPE_INITIAL_UE_MESSAGE    1
-#define MME_TAU_TYPE_UPLINK_NAS_TRANPORT   2
-#define MME_TAU_TYPE_UNPROTECTED_INGERITY  3
-    uint8_t tracking_area_update_request_type;
+    uint64_t tracking_area_update_request_presencemask;
+    uint16_t tracking_area_update_request_ebcs_value;
+    S1AP_ProcedureCode_t tracking_area_update_accept_proc;
+
 
     /* 1. MME initiated detach request to the UE.
      *    (nas_eps.type = MME_EPS_TYPE_DETACH_REQUEST_TO_UE)
@@ -525,8 +540,24 @@ struct mme_ue_s {
     int             security_context_available;
     int             mac_failed;
 
+    /* Authentication synch failure counter */
+    uint8_t auth_synch_fail_count;
+
     /* flag: 1 = allow restoration of context, 0 = disallow */
     bool            can_restore_context;
+
+    /*
+     * ue_context_will_remove:
+     *
+     * Set when the UE context must be removed locally after the current
+     * EMM event completes, but we must not free the UE context inside
+     * the ongoing procedure.
+     *
+     * This flag is used to defer UE context removal to a dedicated EMM
+     * state (emm_state_ue_context_will_remove) to avoid use-after-free
+     * and double-free scenarios in implicit detach paths.
+     */
+    bool            ue_context_will_remove;
 
     /* Memento of context fields */
     mme_ue_memento_t memento;
@@ -603,15 +634,17 @@ struct mme_ue_s {
     /* ESM Info */
     ogs_list_t      sess_list;
 
+#define INVALID_EPS_BEARER_ID       0
 #define MIN_EPS_BEARER_ID           5
 #define MAX_EPS_BEARER_ID           15
 
 #define CLEAR_EPS_BEARER_ID(__mME) \
     do { \
         ogs_assert((__mME)); \
-        mme_ebi_pool_clear(__mME); \
+        (__mME)->ebi_bitmap = 0; \
     } while(0)
-    OGS_POOL(ebi_pool, uint8_t);
+
+    uint16_t ebi_bitmap; /* bit5~bit15 used */
 
     /* Paging Info */
 #define ECM_CONNECTED(__mME) \
@@ -799,6 +832,7 @@ struct mme_ue_s {
 
 #define GTP_COUNTER_CREATE_SESSION_BY_PATH_SWITCH               1
 #define GTP_COUNTER_DELETE_SESSION_BY_PATH_SWITCH               2
+#define GTP_COUNTER_DELETE_SESSION_BY_TAU                       3
     struct {
         uint8_t request;
         uint8_t response;
@@ -809,6 +843,15 @@ struct mme_ue_s {
     mme_csmap_t     *csmap;
     mme_hssmap_t    *hssmap;
 };
+
+#define MME_UE_REMOVE_WITH_PAGING_FAIL(__mME) \
+    do { \
+        if (MME_PAGING_ONGOING(__mME)) { \
+            ogs_error("Paging is ON-Going [%d]", (__mME)->paging.type); \
+            mme_send_after_paging(__mME, false); \
+        } \
+        mme_ue_remove(__mME); \
+    } while(0)
 
 #define SESSION_CONTEXT_IS_AVAILABLE(__mME) \
     ((__mME) && \
@@ -932,7 +975,6 @@ typedef struct mme_bearer_s {
 
     ogs_fsm_t       sm;             /* State Machine */
 
-    uint8_t         *ebi_node;      /* Pool-Node for EPS Bearer ID */
     uint8_t         ebi;            /* EPS Bearer ID */
 
     uint32_t        enb_s1u_teid;
@@ -1210,15 +1252,19 @@ int mme_find_served_tai(ogs_eps_tai_t *tai);
 mme_m_tmsi_t *mme_m_tmsi_alloc(void);
 int mme_m_tmsi_free(mme_m_tmsi_t *tmsi);
 
-void mme_ebi_pool_init(mme_ue_t *mme_ue);
-void mme_ebi_pool_final(mme_ue_t *mme_ue);
-void mme_ebi_pool_clear(mme_ue_t *mme_ue);
+uint8_t mme_ebi_alloc(mme_ue_t *mme_ue);
+int mme_ebi_free(mme_ue_t *mme_ue, int ebi);
+int mme_ebi_reserve(mme_ue_t *mme_ue, int ebi);
 
 uint8_t mme_selected_int_algorithm(mme_ue_t *mme_ue);
 uint8_t mme_selected_enc_algorithm(mme_ue_t *mme_ue);
 
 void mme_ue_save_memento(mme_ue_t *mme_ue, mme_ue_memento_t *memento);
 void mme_ue_restore_memento(mme_ue_t *mme_ue, const mme_ue_memento_t *memento);
+
+mme_emerg_t *mme_emerg_add(uint8_t categories, const char *digits);
+void mme_emerg_remove(mme_emerg_t *emerg);
+void mme_emerg_remove_all(void);
 
 #ifdef __cplusplus
 }

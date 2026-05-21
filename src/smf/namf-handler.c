@@ -23,7 +23,8 @@
 #include "namf-handler.h"
 
 bool smf_namf_comm_handle_n1_n2_message_transfer(
-        smf_sess_t *sess, int state, ogs_sbi_message_t *recvmsg)
+        smf_sess_t *sess, ogs_sbi_stream_t *stream,
+        int state, ogs_sbi_message_t *recvmsg)
 {
     smf_ue_t *smf_ue = NULL;
     OpenAPI_n1_n2_message_transfer_rsp_data_t *N1N2MessageTransferRspData;
@@ -37,6 +38,15 @@ bool smf_namf_comm_handle_n1_n2_message_transfer(
     switch (state) {
     case SMF_UE_REQUESTED_PDU_SESSION_ESTABLISHMENT:
         if (recvmsg->res_status == OGS_SBI_HTTP_STATUS_OK) {
+/*
+ * Non-roaming/LBO: start network-triggered PDU Session Modification at step 11
+ * after N1N2 transfer (Establishment Accept) and N2/N4 context sync, ensuring
+ * the session is active on UE, RAN, and SMF before applying QoS updates.
+ *
+ * Home-Routed Roaming: trigger PDU Session Modification at step 13
+ * immediately after H-SMF’s CreateSMContext response and H-UPF N4 setup
+ * to apply QoS updates without waiting for V-SMF or RAN setup.
+ */
             smf_qos_flow_binding(sess);
         } else {
             ogs_error("[%s:%d] HTTP response error [%d]",
@@ -56,7 +66,17 @@ bool smf_namf_comm_handle_n1_n2_message_transfer(
         if (recvmsg->res_status == OGS_SBI_HTTP_STATUS_OK) {
             if (N1N2MessageTransferRspData->cause ==
                 OpenAPI_n1_n2_message_transfer_cause_N1_N2_TRANSFER_INITIATED) {
-                /* Nothing */
+                if (stream) {
+                    if (sess->vsmf_to_hsmf_modify_stream_id >=
+                            OGS_MIN_POOL_ID &&
+                        sess->vsmf_to_hsmf_modify_stream_id <=
+                            OGS_MAX_POOL_ID)
+                        ogs_error("N1 N2 modified stream ID [%d]"
+                                "has not been used yet",
+                                sess->vsmf_to_hsmf_modify_stream_id);
+                    sess->vsmf_to_hsmf_modify_stream_id =
+                        ogs_sbi_id_from_stream(stream);
+                }
             } else {
                 ogs_error("Not implemented [cause:%d]",
                         N1N2MessageTransferRspData->cause);
@@ -70,6 +90,18 @@ bool smf_namf_comm_handle_n1_n2_message_transfer(
                             sess, recvmsg->http.location);
                 else
                     ogs_error("No HTTP Location");
+
+                if (stream) {
+                    if (sess->vsmf_to_hsmf_modify_stream_id >=
+                            OGS_MIN_POOL_ID &&
+                        sess->vsmf_to_hsmf_modify_stream_id <=
+                            OGS_MAX_POOL_ID)
+                        ogs_error("N1 N2 modified stream ID [%d]"
+                                "has not been used yet",
+                                sess->vsmf_to_hsmf_modify_stream_id);
+                    sess->vsmf_to_hsmf_modify_stream_id =
+                        ogs_sbi_id_from_stream(stream);
+                }
             } else {
                 ogs_error("Not implemented [cause:%d]",
                         N1N2MessageTransferRspData->cause);
@@ -104,7 +136,7 @@ bool smf_namf_comm_handle_n1_n2_message_transfer(
         }
         break;
 
-    case SMF_NETWORK_REQUESTED_PDU_SESSION_RELEASE:
+    case SMF_UE_OR_NETWORK_REQUESTED_PDU_SESSION_RELEASE:
     case SMF_ERROR_INDICATON_RECEIVED_FROM_5G_AN:
 
         N1N2MessageTransferRspData = recvmsg->N1N2MessageTransferRspData;
@@ -158,10 +190,19 @@ bool smf_namf_comm_handle_n1_n2_message_transfer(
 
                 param.n1n2_failure_txf_notif_uri = true;
 
-                smf_namf_comm_send_n1_n2_message_transfer(sess, &param);
+                smf_namf_comm_send_n1_n2_message_transfer(sess, NULL, &param);
             } else if (N1N2MessageTransferRspData->cause ==
                 OpenAPI_n1_n2_message_transfer_cause_N1_N2_TRANSFER_INITIATED) {
-                /* Nothing */
+                if (stream) {
+                    if (sess->vsmf_to_hsmf_release_stream_id >=
+                            OGS_MIN_POOL_ID &&
+                        sess->vsmf_to_hsmf_release_stream_id <= OGS_MAX_POOL_ID)
+                        ogs_error("N1 N2 released stream ID [%d]"
+                                "has not been used yet",
+                                sess->vsmf_to_hsmf_release_stream_id);
+                    sess->vsmf_to_hsmf_release_stream_id =
+                        ogs_sbi_id_from_stream(stream);
+                }
             } else {
                 ogs_error("Not implemented [cause:%d]",
                         N1N2MessageTransferRspData->cause);

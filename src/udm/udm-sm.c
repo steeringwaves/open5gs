@@ -38,6 +38,7 @@ void udm_state_operational(ogs_fsm_t *s, udm_event_t *e)
 {
     int rv;
     const char *api_version = NULL;
+    char *supi = NULL;
 
     ogs_sbi_stream_t *stream = NULL;
     ogs_pool_id_t stream_id = OGS_INVALID_POOL_ID;
@@ -153,28 +154,34 @@ void udm_state_operational(ogs_fsm_t *s, udm_event_t *e)
                 break;
             }
 
-            if (!message.h.resource.component[1]) {
-                ogs_error("Invalid resource name [%s]", message.h.method);
-                ogs_assert(true ==
-                    ogs_sbi_server_send_error(stream,
-                        OGS_SBI_HTTP_STATUS_BAD_REQUEST,
-                        &message, "Invalid resource name", message.h.method,
-                        NULL));
-                break;
+            if (!message.param.num_of_dataset_names) {
+                if (!message.h.resource.component[1]) {
+                    ogs_error("Invalid resource name [%s]", message.h.method);
+                    ogs_assert(true ==
+                        ogs_sbi_server_send_error(stream,
+                            OGS_SBI_HTTP_STATUS_BAD_REQUEST,
+                            &message, "Invalid resource name", message.h.method,
+                            NULL));
+                    break;
+                }
+
+                SWITCH(message.h.resource.component[1])
+                CASE(OGS_SBI_RESOURCE_NAME_AUTH_EVENTS)
+                    if (message.h.resource.component[2]) {
+                        udm_ue = udm_ue_find_by_ctx_id(
+                                message.h.resource.component[2]);
+                    }
+                DEFAULT
+                END
             }
 
-            SWITCH(message.h.resource.component[1])
-            CASE(OGS_SBI_RESOURCE_NAME_AUTH_EVENTS)
-                if (message.h.resource.component[2]) {
-                    udm_ue = udm_ue_find_by_ctx_id(
-                            message.h.resource.component[2]);
-                }
-            DEFAULT
-            END
-
             if (!udm_ue) {
-                udm_ue = udm_ue_find_by_suci_or_supi(
-                        message.h.resource.component[0]);
+                supi = ogs_supi_from_supi_or_suci(
+                    message.h.resource.component[0]);
+                if (supi) {
+                    udm_ue = udm_ue_find_by_supi(supi);
+                }
+                ogs_free(supi);
                 if (!udm_ue) {
                     SWITCH(message.h.method)
                     CASE(OGS_SBI_HTTP_METHOD_POST)
@@ -205,6 +212,16 @@ void udm_state_operational(ogs_fsm_t *s, udm_event_t *e)
             CASE(OGS_SBI_RESOURCE_NAME_SMF_REGISTRATIONS)
                 if (message.h.resource.component[3]) {
                     uint8_t psi = atoi(message.h.resource.component[3]);
+                    if (psi == OGS_NAS_PDU_SESSION_IDENTITY_UNASSIGNED) {
+                        ogs_error("PDU Session Identitiy unassigned [%s]",
+                                message.h.resource.component[3]);
+                        ogs_assert(true ==
+                            ogs_sbi_server_send_error(stream,
+                                OGS_SBI_HTTP_STATUS_BAD_REQUEST,
+                                &message, "PDU Session Identitiy unassigned",
+                                message.h.resource.component[3], NULL));
+                        break;
+                    }
 
                     sess = udm_sess_find_by_psi(udm_ue, psi);
                     if (!sess) {
@@ -347,15 +364,17 @@ void udm_state_operational(ogs_fsm_t *s, udm_event_t *e)
                     break;
 
                 CASE(OGS_SBI_HTTP_METHOD_DELETE)
-                    if (message.res_status ==
-                            OGS_SBI_HTTP_STATUS_NO_CONTENT) {
-                        ogs_sbi_subscription_data_remove(subscription_data);
-                    } else {
+                    if (message.res_status == OGS_SBI_HTTP_STATUS_NO_CONTENT)
+                        ogs_info("[%s] Subscription deleted",
+                                subscription_data->id ?
+                                    subscription_data->id : "Unknown");
+                    else
                         ogs_error("[%s] HTTP response error [%d]",
                                 subscription_data->id ?
                                     subscription_data->id : "Unknown",
                                 message.res_status);
-                    }
+
+                    ogs_sbi_subscription_data_remove(subscription_data);
                     break;
 
                 DEFAULT

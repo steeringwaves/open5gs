@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2019-2025 by Sukchan Lee <acetcom@gmail.com>
+ * Copyright (C) 2019-2026 by Sukchan Lee <acetcom@gmail.com>
  *
  * This file is part of Open5GS.
  *
@@ -85,6 +85,8 @@ void gmm_state_de_registered(ogs_fsm_t *s, amf_event_t *e)
     ogs_sbi_message_t *sbi_message = NULL;
 
     int r, state = 0, xact_count;
+
+    amf_nsmf_pdusession_sm_context_param_t param;
 
     ogs_assert(s);
     ogs_assert(e);
@@ -244,13 +246,12 @@ void gmm_state_de_registered(ogs_fsm_t *s, amf_event_t *e)
                 ogs_expect(r == OGS_OK);
                 ogs_assert(r != OGS_ERROR);
             } else if (PCF_AM_POLICY_ASSOCIATED(amf_ue)) {
-                    r = amf_ue_sbi_discover_and_send(
-                        OGS_SBI_SERVICE_TYPE_NPCF_AM_POLICY_CONTROL,
-                        NULL,
-                        amf_npcf_am_policy_control_build_delete,
-                        amf_ue, state, NULL);
-                    ogs_expect(r == OGS_OK);
-                    ogs_assert(r != OGS_ERROR);
+                r = amf_ue_sbi_discover_and_send(
+                    OGS_SBI_SERVICE_TYPE_NPCF_AM_POLICY_CONTROL, NULL,
+                    amf_npcf_am_policy_control_build_delete,
+                    amf_ue, state, NULL);
+                ogs_expect(r == OGS_OK);
+                ogs_assert(r != OGS_ERROR);
             }
             break;
 
@@ -264,6 +265,8 @@ void gmm_state_de_registered(ogs_fsm_t *s, amf_event_t *e)
         sbi_message = e->h.sbi.message;
         ogs_assert(sbi_message);
         state = e->h.sbi.state;
+
+        xact_count = amf_sess_xact_count(amf_ue);
 
         SWITCH(sbi_message->h.service.name)
         CASE(OGS_SBI_SERVICE_NAME_NAUSF_AUTH)
@@ -291,6 +294,57 @@ void gmm_state_de_registered(ogs_fsm_t *s, amf_event_t *e)
                     ogs_error("[%s] Ignore SBI message", amf_ue->suci);
                     break;
                 CASE(OGS_SBI_HTTP_METHOD_DELETE)
+                    /*
+                     * gmm_state_de_registered()
+                     *
+                     * - AMF_UE_INITIATED_DE_REGISTERED
+                     * 1. PDU session establishment request
+                     * 2. PDUSessionResourceSetupRequest +
+                     *    PDU session establishment accept
+                     * 3. PDUSessionResourceSetupResponse
+                     * 4. Authentication Result Removal
+                     * 5. AM_Policy_Association_Termination
+                     * 6. Deregistration request
+                     * 7. UEContextReleaseCommand
+                     * 8. UEContextReleaseComplete
+                     *
+                     * - AMF_RELEASE_SM_CONTEXT_NO_STATE
+                     * 1. PDU session release request
+                     * 2. PDUSessionResourceReleaseCommand +
+                     *    PDU session release command
+                     * 3. PDUSessionResourceReleaseREsponse
+                     * 4. PDU session release complete
+                     * 5. Authentication Result Removal
+                     * 6. AM_Policy_Association_Termination
+                     * 7. Deregistration request
+                     * 8. UEContextReleaseCommand
+                     * 9. UEContextReleaseComplete
+                     *
+                     * - AMF_NETWORK_INITIATED_IMPLICIT_DE_REGISTERED
+                     * 1. Implicit Timer Expiration
+                     * 2. UDM_SDM_Unsubscribe
+                     * 3. UDM_UECM_Deregisration
+                     * 4. PDU session release request
+                     * 5. PDUSessionResourceReleaseCommand +
+                     *    PDU session release command
+                     * 6. PDUSessionResourceReleaseResponse
+                     * 7. Authentication Result Removal
+                     * 8. AM_Policy_Association_Termination
+                     *
+                     * - AMF_NETWORK_INITIATED_EXPLICIT_DE_REGISTERED
+                     * 1. UDM_UECM_DeregistrationNotification
+                     * 2. Deregistration request
+                     * 3. UDM_SDM_Unsubscribe
+                     * 4. UDM_UECM_Deregisration
+                     * 5. PDU session release request
+                     * 6. PDUSessionResourceReleaseCommand +
+                     *    PDU session release command
+                     * 7. PDUSessionResourceReleaseResponse
+                     * 8. Authentication Result Removal
+                     * 9. AM_Policy_Association_Termination
+                     * 10.Deregistration accept
+                     * 11.Signalling Connecion Release
+                     */
                     CLEAR_5G_AKA_CONFIRMATION(amf_ue);
 
                     if (state == AMF_RELEASE_SM_CONTEXT_NO_STATE ||
@@ -315,8 +369,12 @@ void gmm_state_de_registered(ogs_fsm_t *s, amf_event_t *e)
                                state ==
                             AMF_NETWORK_INITIATED_EXPLICIT_DE_REGISTERED) {
 
-                        xact_count = amf_sess_xact_count(amf_ue);
-                        amf_sbi_send_release_all_sessions(NULL, amf_ue, state);
+                        memset(&param, 0, sizeof(param));
+                        param.ue_location = true;
+                        param.ue_timezone = true;
+
+                        amf_sbi_send_release_all_sessions(
+                                NULL, amf_ue, state, &param);
 
                         if (!AMF_SESSION_RELEASE_PENDING(amf_ue) &&
                             amf_sess_xact_count(amf_ue) == xact_count) {
@@ -357,29 +415,38 @@ void gmm_state_de_registered(ogs_fsm_t *s, amf_event_t *e)
             if ((sbi_message->res_status != OGS_SBI_HTTP_STATUS_OK) &&
                 (sbi_message->res_status != OGS_SBI_HTTP_STATUS_CREATED) &&
                 (sbi_message->res_status != OGS_SBI_HTTP_STATUS_NO_CONTENT)) {
-                ogs_error("[%s] HTTP response error [%d]",
-                          amf_ue->supi, sbi_message->res_status);
+                ogs_error("[%s] HTTP response error [%d] in (%s:%s)",
+                        amf_ue->supi, sbi_message->res_status,
+                        sbi_message->h.method,
+                        sbi_message->h.resource.component[1]);
             }
 
             SWITCH(sbi_message->h.resource.component[1])
             CASE(OGS_SBI_RESOURCE_NAME_AM_DATA)
             CASE(OGS_SBI_RESOURCE_NAME_SMF_SELECT_DATA)
             CASE(OGS_SBI_RESOURCE_NAME_UE_CONTEXT_IN_SMF_DATA)
-                ogs_error("[%s] Ignore SBI message", amf_ue->supi);
+                ogs_error("[%s] Ignore SBI message [%d] in (%s:%s)",
+                        amf_ue->supi, sbi_message->res_status,
+                        sbi_message->h.method,
+                        sbi_message->h.resource.component[1]);
                 break;
 
             CASE(OGS_SBI_RESOURCE_NAME_SDM_SUBSCRIPTIONS)
                 SWITCH(sbi_message->h.method)
                 CASE(OGS_SBI_HTTP_METHOD_DELETE)
                     /*
+                     * gmm_state_de_registered()
+                     *
                      * - AMF_UE_INITIATED_DE_REGISTERED
                      * 1. PDU session establishment request
                      * 2. PDUSessionResourceSetupRequest +
                      *    PDU session establishment accept
                      * 3. PDUSessionResourceSetupResponse
-                     * 4. Deregistration request
-                     * 5. UEContextReleaseCommand
-                     * 6. UEContextReleaseComplete
+                     * 4. Authentication Result Removal
+                     * 5. AM_Policy_Association_Termination
+                     * 6. Deregistration request
+                     * 7. UEContextReleaseCommand
+                     * 8. UEContextReleaseComplete
                      *
                      * - AMF_RELEASE_SM_CONTEXT_NO_STATE
                      * 1. PDU session release request
@@ -387,12 +454,41 @@ void gmm_state_de_registered(ogs_fsm_t *s, amf_event_t *e)
                      *    PDU session release command
                      * 3. PDUSessionResourceReleaseREsponse
                      * 4. PDU session release complete
-                     * 5. Deregistration request
-                     * 6. UEContextReleaseCommand
-                     * 7. UEContextReleaseComplete
+                     * 5. Authentication Result Removal
+                     * 6. AM_Policy_Association_Termination
+                     * 7. Deregistration request
+                     * 8. UEContextReleaseCommand
+                     * 9. UEContextReleaseComplete
+                     *
+                     * - AMF_NETWORK_INITIATED_IMPLICIT_DE_REGISTERED
+                     * 1. Implicit Timer Expiration
+                     * 2. UDM_SDM_Unsubscribe
+                     * 3. UDM_UECM_Deregisration
+                     * 4. PDU session release request
+                     * 5. PDUSessionResourceReleaseCommand +
+                     *    PDU session release command
+                     * 6. PDUSessionResourceReleaseResponse
+                     * 7. Authentication Result Removal
+                     * 8. AM_Policy_Association_Termination
+                     *
+                     * - AMF_NETWORK_INITIATED_EXPLICIT_DE_REGISTERED
+                     * 1. UDM_UECM_DeregistrationNotification
+                     * 2. Deregistration request
+                     * 3. UDM_SDM_Unsubscribe
+                     * 4. UDM_UECM_Deregisration
+                     * 5. PDU session release request
+                     * 6. PDUSessionResourceReleaseCommand +
+                     *    PDU session release command
+                     * 7. PDUSessionResourceReleaseResponse
+                     * 8. Authentication Result Removal
+                     * 9. AM_Policy_Association_Termination
+                     * 10.Deregistration accept
+                     * 11.Signalling Connecion Release
                      */
                     if (state == AMF_RELEASE_SM_CONTEXT_NO_STATE ||
-                        state == AMF_UE_INITIATED_DE_REGISTERED) {
+                        state == AMF_UE_INITIATED_DE_REGISTERED ||
+                        state == AMF_NETWORK_INITIATED_IMPLICIT_DE_REGISTERED ||
+                        state == AMF_NETWORK_INITIATED_EXPLICIT_DE_REGISTERED) {
                         UDM_SDM_CLEAR(amf_ue);
 
                         r = amf_ue_sbi_discover_and_send(
@@ -402,18 +498,25 @@ void gmm_state_de_registered(ogs_fsm_t *s, amf_event_t *e)
                         ogs_expect(r == OGS_OK);
                         ogs_assert(r != OGS_ERROR);
                     } else {
-                        ogs_fatal("Invalid state [%d]", state);
+                        ogs_fatal("[%s:%d] Invalid state [%d] in (%s:%s)",
+                                amf_ue->supi, state, sbi_message->res_status,
+                                sbi_message->h.method,
+                                sbi_message->h.resource.component[1]);
                         ogs_assert_if_reached();
                     }
                     break;
                 DEFAULT
-                    ogs_error("[%s] Ignore invalid HTTP method [%s]",
-                            amf_ue->suci, sbi_message->h.method);
+                    ogs_error("[%s] Ignore invalid HTTP method [%d] in (%s:%s)",
+                            amf_ue->supi, sbi_message->res_status,
+                            sbi_message->h.method,
+                            sbi_message->h.resource.component[1]);
                 END
                 break;
 
             DEFAULT
-                ogs_error("Invalid resource name [%s]",
+                ogs_fatal("[%s] Invalid resource name [%d] in (%s:%s)",
+                        amf_ue->supi, sbi_message->res_status,
+                        sbi_message->h.method,
                         sbi_message->h.resource.component[1]);
                 ogs_assert_if_reached();
             END
@@ -436,33 +539,62 @@ void gmm_state_de_registered(ogs_fsm_t *s, amf_event_t *e)
                 CASE(OGS_SBI_HTTP_METHOD_PATCH)
                     SWITCH(sbi_message->h.resource.component[2])
                     CASE(OGS_SBI_RESOURCE_NAME_AMF_3GPP_ACCESS)
-                        /*
-                         * - AMF_UE_INITIATED_DE_REGISTERED
-                         * 1. PDU session establishment request
-                         * 2. PDUSessionResourceSetupRequest +
-                         *    PDU session establishment accept
-                         * 3. PDUSessionResourceSetupResponse
-                         * 4. Deregistration request
-                         * 5. UEContextReleaseCommand
-                         * 6. UEContextReleaseComplete
-                         *
-                         * - AMF_RELEASE_SM_CONTEXT_NO_STATE
-                         * 1. PDU session release request
-                         * 2. PDUSessionResourceReleaseCommand +
-                         *    PDU session release command
-                         * 3. PDUSessionResourceReleaseREsponse
-                         * 4. PDU session release complete
-                         * 5. Deregistration request
-                         * 6. UEContextReleaseCommand
-                         * 7. UEContextReleaseComplete
-                         */
+                    /*
+                     * gmm_state_de_registered()
+                     *
+                     * - AMF_UE_INITIATED_DE_REGISTERED
+                     * 1. PDU session establishment request
+                     * 2. PDUSessionResourceSetupRequest +
+                     *    PDU session establishment accept
+                     * 3. PDUSessionResourceSetupResponse
+                     * 4. Authentication Result Removal
+                     * 5. AM_Policy_Association_Termination
+                     * 6. Deregistration request
+                     * 7. UEContextReleaseCommand
+                     * 8. UEContextReleaseComplete
+                     *
+                     * - AMF_RELEASE_SM_CONTEXT_NO_STATE
+                     * 1. PDU session release request
+                     * 2. PDUSessionResourceReleaseCommand +
+                     *    PDU session release command
+                     * 3. PDUSessionResourceReleaseREsponse
+                     * 4. PDU session release complete
+                     * 5. Authentication Result Removal
+                     * 6. AM_Policy_Association_Termination
+                     * 7. Deregistration request
+                     * 8. UEContextReleaseCommand
+                     * 9. UEContextReleaseComplete
+                     *
+                     * - AMF_NETWORK_INITIATED_IMPLICIT_DE_REGISTERED
+                     * 1. Implicit Timer Expiration
+                     * 2. UDM_SDM_Unsubscribe
+                     * 3. UDM_UECM_Deregisration
+                     * 4. PDU session release request
+                     * 5. PDUSessionResourceReleaseCommand +
+                     *    PDU session release command
+                     * 6. PDUSessionResourceReleaseResponse
+                     * 7. Authentication Result Removal
+                     * 8. AM_Policy_Association_Termination
+                     *
+                     * - AMF_NETWORK_INITIATED_EXPLICIT_DE_REGISTERED
+                     * 1. UDM_UECM_DeregistrationNotification
+                     * 2. Deregistration request
+                     * 3. UDM_SDM_Unsubscribe
+                     * 4. UDM_UECM_Deregisration
+                     * 5. PDU session release request
+                     * 6. PDUSessionResourceReleaseCommand +
+                     *    PDU session release command
+                     * 7. PDUSessionResourceReleaseResponse
+                     * 8. Authentication Result Removal
+                     * 9. AM_Policy_Association_Termination
+                     * 10.Deregistration accept
+                     * 11.Signalling Connecion Release
+                     */
                         if (state == AMF_RELEASE_SM_CONTEXT_NO_STATE ||
                             state == AMF_UE_INITIATED_DE_REGISTERED) {
-
                             if (CHECK_5G_AKA_CONFIRMATION(amf_ue)) {
                                 r = amf_ue_sbi_discover_and_send(
-                                    OGS_SBI_SERVICE_TYPE_NAUSF_AUTH,
-                                    NULL,
+                                    OGS_SBI_SERVICE_TYPE_NAUSF_AUTH, NULL,
                                     amf_nausf_auth_build_authenticate_delete,
                                     amf_ue, state, NULL);
                                 ogs_expect(r == OGS_OK);
@@ -479,6 +611,39 @@ void gmm_state_de_registered(ogs_fsm_t *s, amf_event_t *e)
                                 r = nas_5gs_send_de_registration_accept(amf_ue);
                                 ogs_expect(r == OGS_OK);
                                 ogs_assert(r != OGS_ERROR);
+                            }
+                        } else if (state ==
+                                AMF_NETWORK_INITIATED_IMPLICIT_DE_REGISTERED ||
+                                state ==
+                                AMF_NETWORK_INITIATED_EXPLICIT_DE_REGISTERED) {
+                            if (CHECK_5G_AKA_CONFIRMATION(amf_ue)) {
+                                r = amf_ue_sbi_discover_and_send(
+                                        OGS_SBI_SERVICE_TYPE_NAUSF_AUTH, NULL,
+                                        amf_nausf_auth_build_authenticate_delete,
+                                        amf_ue, state, NULL);
+                                ogs_expect(r == OGS_OK);
+                                ogs_assert(r != OGS_ERROR);
+                            } else {
+                                memset(&param, 0, sizeof(param));
+                                param.ue_location = true;
+                                param.ue_timezone = true;
+
+                                amf_sbi_send_release_all_sessions(
+                                        NULL, amf_ue, state, &param);
+
+                                if (!AMF_SESSION_RELEASE_PENDING(amf_ue) &&
+                                    amf_sess_xact_count(amf_ue) == xact_count) {
+
+                                    if (PCF_AM_POLICY_ASSOCIATED(amf_ue)) {
+                                        r = amf_ue_sbi_discover_and_send(
+                                                OGS_SBI_SERVICE_TYPE_NPCF_AM_POLICY_CONTROL,
+                                                NULL,
+                                                amf_npcf_am_policy_control_build_delete,
+                                                amf_ue, state, NULL);
+                                        ogs_expect(r == OGS_OK);
+                                        ogs_assert(r != OGS_ERROR);
+                                    }
+                                }
                             }
                         } else {
                             ogs_fatal("Invalid state [%d]", state);
@@ -510,7 +675,8 @@ void gmm_state_de_registered(ogs_fsm_t *s, amf_event_t *e)
             CASE(OGS_SBI_RESOURCE_NAME_POLICIES)
                 SWITCH(sbi_message->h.method)
                 CASE(OGS_SBI_HTTP_METHOD_POST)
-                    if (sbi_message->res_status != OGS_SBI_HTTP_STATUS_CREATED) {
+                    if (sbi_message->res_status !=
+                            OGS_SBI_HTTP_STATUS_CREATED) {
                         ogs_error("[%s] HTTP response error [%d]",
                                 amf_ue->supi, sbi_message->res_status);
                     }
@@ -519,14 +685,18 @@ void gmm_state_de_registered(ogs_fsm_t *s, amf_event_t *e)
 
                 CASE(OGS_SBI_HTTP_METHOD_DELETE)
                     /*
+                     * gmm_state_de_registered()
+                     *
                      * - AMF_UE_INITIATED_DE_REGISTERED
                      * 1. PDU session establishment request
                      * 2. PDUSessionResourceSetupRequest +
                      *    PDU session establishment accept
                      * 3. PDUSessionResourceSetupResponse
-                     * 4. Deregistration request
-                     * 5. UEContextReleaseCommand
-                     * 6. UEContextReleaseComplete
+                     * 4. Authentication Result Removal
+                     * 5. AM_Policy_Association_Termination
+                     * 6. Deregistration request
+                     * 7. UEContextReleaseCommand
+                     * 8. UEContextReleaseComplete
                      *
                      * - AMF_RELEASE_SM_CONTEXT_NO_STATE
                      * 1. PDU session release request
@@ -534,9 +704,36 @@ void gmm_state_de_registered(ogs_fsm_t *s, amf_event_t *e)
                      *    PDU session release command
                      * 3. PDUSessionResourceReleaseREsponse
                      * 4. PDU session release complete
-                     * 5. Deregistration request
-                     * 6. UEContextReleaseCommand
-                     * 7. UEContextReleaseComplete
+                     * 5. Authentication Result Removal
+                     * 6. AM_Policy_Association_Termination
+                     * 7. Deregistration request
+                     * 8. UEContextReleaseCommand
+                     * 9. UEContextReleaseComplete
+                     *
+                     * - AMF_NETWORK_INITIATED_IMPLICIT_DE_REGISTERED
+                     * 1. Implicit Timer Expiration
+                     * 2. UDM_SDM_Unsubscribe
+                     * 3. UDM_UECM_Deregisration
+                     * 4. PDU session release request
+                     * 5. PDUSessionResourceReleaseCommand +
+                     *    PDU session release command
+                     * 6. PDUSessionResourceReleaseResponse
+                     * 7. Authentication Result Removal
+                     * 8. AM_Policy_Association_Termination
+                     *
+                     * - AMF_NETWORK_INITIATED_EXPLICIT_DE_REGISTERED
+                     * 1. UDM_UECM_DeregistrationNotification
+                     * 2. Deregistration request
+                     * 3. UDM_SDM_Unsubscribe
+                     * 4. UDM_UECM_Deregisration
+                     * 5. PDU session release request
+                     * 6. PDUSessionResourceReleaseCommand +
+                     *    PDU session release command
+                     * 7. PDUSessionResourceReleaseResponse
+                     * 8. Authentication Result Removal
+                     * 9. AM_Policy_Association_Termination
+                     * 10.Deregistration accept
+                     * 11.Signalling Connecion Release
                      */
                     if (state == AMF_RELEASE_SM_CONTEXT_NO_STATE ||
                         state == AMF_UE_INITIATED_DE_REGISTERED) {
@@ -545,6 +742,27 @@ void gmm_state_de_registered(ogs_fsm_t *s, amf_event_t *e)
                         ogs_assert(r != OGS_ERROR);
 
                         PCF_AM_POLICY_CLEAR(amf_ue);
+                    } else if (state ==
+                            AMF_NETWORK_INITIATED_IMPLICIT_DE_REGISTERED) {
+                        ogs_warn("[%s] Implicit De-registered", amf_ue->supi);
+                        OGS_FSM_TRAN(&amf_ue->sm,
+                                &gmm_state_ue_context_will_remove);
+
+                    } else if (state ==
+                            AMF_NETWORK_INITIATED_EXPLICIT_DE_REGISTERED) {
+                        ogs_warn("[%s] Explicit De-registered", amf_ue->supi);
+
+                        amf_ue->explict_de_registered.sbi_done = true;
+
+                        if (amf_ue->explict_de_registered.n1_done == true) {
+                            r = ngap_send_ran_ue_context_release_command(
+                                    ran_ue_find_by_id(amf_ue->ran_ue_id),
+                                    NGAP_Cause_PR_misc,
+                                    NGAP_CauseMisc_om_intervention,
+                                    NGAP_UE_CTX_REL_UE_CONTEXT_REMOVE, 0);
+                            ogs_expect(r == OGS_OK);
+                            ogs_assert(r != OGS_ERROR);
+                        }
                     } else {
                         ogs_fatal("Invalid state [%d]", state);
                         ogs_assert_if_reached();
@@ -601,10 +819,13 @@ void gmm_state_de_registered(ogs_fsm_t *s, amf_event_t *e)
                         }
                     }
 
-                    xact_count = amf_sess_xact_count(amf_ue);
+                    memset(&param, 0, sizeof(param));
+                    param.ue_location = true;
+                    param.ue_timezone = true;
+
                     amf_sbi_send_release_all_sessions(
                             ran_ue_find_by_id(amf_ue->ran_ue_id), amf_ue,
-                            AMF_RELEASE_SM_CONTEXT_NO_STATE);
+                            AMF_RELEASE_SM_CONTEXT_NO_STATE, &param);
 
                     if (!AMF_SESSION_RELEASE_PENDING(amf_ue) &&
                         amf_sess_xact_count(amf_ue) == xact_count) {
@@ -652,6 +873,8 @@ void gmm_state_registered(ogs_fsm_t *s, amf_event_t *e)
     amf_sess_t *sess = NULL;
 
     ogs_sbi_message_t *sbi_message = NULL;
+
+    amf_nsmf_pdusession_sm_context_param_t param;
 
     ogs_assert(s);
     ogs_assert(e);
@@ -840,13 +1063,12 @@ void gmm_state_registered(ogs_fsm_t *s, amf_event_t *e)
                 ogs_expect(r == OGS_OK);
                 ogs_assert(r != OGS_ERROR);
             } else if (PCF_AM_POLICY_ASSOCIATED(amf_ue)) {
-                    r = amf_ue_sbi_discover_and_send(
-                        OGS_SBI_SERVICE_TYPE_NPCF_AM_POLICY_CONTROL,
-                        NULL,
-                        amf_npcf_am_policy_control_build_delete,
-                        amf_ue, state, NULL);
-                    ogs_expect(r == OGS_OK);
-                    ogs_assert(r != OGS_ERROR);
+                r = amf_ue_sbi_discover_and_send(
+                    OGS_SBI_SERVICE_TYPE_NPCF_AM_POLICY_CONTROL, NULL,
+                    amf_npcf_am_policy_control_build_delete,
+                    amf_ue, state, NULL);
+                ogs_expect(r == OGS_OK);
+                ogs_assert(r != OGS_ERROR);
             }
             break;
 
@@ -867,7 +1089,6 @@ void gmm_state_registered(ogs_fsm_t *s, amf_event_t *e)
         CASE(OGS_SBI_SERVICE_NAME_NAUSF_AUTH)
             SWITCH(sbi_message->h.resource.component[0])
             CASE(OGS_SBI_RESOURCE_NAME_UE_AUTHENTICATIONS)
-
                 if (sbi_message->res_status != OGS_SBI_HTTP_STATUS_CREATED &&
                     sbi_message->res_status != OGS_SBI_HTTP_STATUS_OK &&
                     sbi_message->res_status != OGS_SBI_HTTP_STATUS_NO_CONTENT) {
@@ -889,6 +1110,57 @@ void gmm_state_registered(ogs_fsm_t *s, amf_event_t *e)
                     ogs_error("[%s] Ignore SBI message", amf_ue->suci);
                     break;
                 CASE(OGS_SBI_HTTP_METHOD_DELETE)
+                    /*
+                     * gmm_state_registered()
+                     *
+                     * - AMF_UE_INITIATED_DE_REGISTERED
+                     * 1. PDU session establishment request
+                     * 2. PDUSessionResourceSetupRequest +
+                     *    PDU session establishment accept
+                     * 3. PDUSessionResourceSetupResponse
+                     * 4. Authentication Result Removal
+                     * 5. AM_Policy_Association_Termination
+                     * 6. Deregistration request
+                     * 7. UEContextReleaseCommand
+                     * 8. UEContextReleaseComplete
+                     *
+                     * - AMF_RELEASE_SM_CONTEXT_NO_STATE
+                     * 1. PDU session release request
+                     * 2. PDUSessionResourceReleaseCommand +
+                     *    PDU session release command
+                     * 3. PDUSessionResourceReleaseREsponse
+                     * 4. PDU session release complete
+                     * 5. Authentication Result Removal
+                     * 6. AM_Policy_Association_Termination
+                     * 7. Deregistration request
+                     * 8. UEContextReleaseCommand
+                     * 9. UEContextReleaseComplete
+                     *
+                     * - AMF_NETWORK_INITIATED_IMPLICIT_DE_REGISTERED
+                     * 1. Implicit Timer Expiration
+                     * 2. UDM_SDM_Unsubscribe
+                     * 3. UDM_UECM_Deregisration
+                     * 4. PDU session release request
+                     * 5. PDUSessionResourceReleaseCommand +
+                     *    PDU session release command
+                     * 6. PDUSessionResourceReleaseResponse
+                     * 7. Authentication Result Removal
+                     * 8. AM_Policy_Association_Termination
+                     *
+                     * - AMF_NETWORK_INITIATED_EXPLICIT_DE_REGISTERED
+                     * 1. UDM_UECM_DeregistrationNotification
+                     * 2. Deregistration request
+                     * 3. UDM_SDM_Unsubscribe
+                     * 4. UDM_UECM_Deregisration
+                     * 5. PDU session release request
+                     * 6. PDUSessionResourceReleaseCommand +
+                     *    PDU session release command
+                     * 7. PDUSessionResourceReleaseResponse
+                     * 8. Authentication Result Removal
+                     * 9. AM_Policy_Association_Termination
+                     * 10.Deregistration accept
+                     * 11.Signalling Connecion Release
+                     */
                     CLEAR_5G_AKA_CONFIRMATION(amf_ue);
 
                     if (state == AMF_RELEASE_SM_CONTEXT_NO_STATE ||
@@ -913,8 +1185,12 @@ void gmm_state_registered(ogs_fsm_t *s, amf_event_t *e)
                                state ==
                             AMF_NETWORK_INITIATED_EXPLICIT_DE_REGISTERED) {
 
-                        int xact_count = amf_sess_xact_count(amf_ue);
-                        amf_sbi_send_release_all_sessions(NULL, amf_ue, state);
+                        memset(&param, 0, sizeof(param));
+                        param.ue_location = true;
+                        param.ue_timezone = true;
+
+                        amf_sbi_send_release_all_sessions(
+                                NULL, amf_ue, state, &param);
 
                         if (!AMF_SESSION_RELEASE_PENDING(amf_ue) &&
                             amf_sess_xact_count(amf_ue) == xact_count) {
@@ -955,21 +1231,28 @@ void gmm_state_registered(ogs_fsm_t *s, amf_event_t *e)
             if ((sbi_message->res_status != OGS_SBI_HTTP_STATUS_OK) &&
                 (sbi_message->res_status != OGS_SBI_HTTP_STATUS_CREATED) &&
                 (sbi_message->res_status != OGS_SBI_HTTP_STATUS_NO_CONTENT)) {
-                ogs_error("[%s] HTTP response error [%d]",
-                          amf_ue->supi, sbi_message->res_status);
+                ogs_error("[%s] HTTP response error [%d] in (%s:%s)",
+                        amf_ue->supi, sbi_message->res_status,
+                        sbi_message->h.method,
+                        sbi_message->h.resource.component[1]);
             }
 
             SWITCH(sbi_message->h.resource.component[1])
             CASE(OGS_SBI_RESOURCE_NAME_AM_DATA)
             CASE(OGS_SBI_RESOURCE_NAME_SMF_SELECT_DATA)
             CASE(OGS_SBI_RESOURCE_NAME_UE_CONTEXT_IN_SMF_DATA)
-                ogs_error("[%s] Ignore SBI message", amf_ue->supi);
+                ogs_error("[%s] Ignore SBI message [%d] in (%s:%s)",
+                        amf_ue->supi, sbi_message->res_status,
+                        sbi_message->h.method,
+                        sbi_message->h.resource.component[1]);
                 break;
 
             CASE(OGS_SBI_RESOURCE_NAME_SDM_SUBSCRIPTIONS)
                 SWITCH(sbi_message->h.method)
                 CASE(OGS_SBI_HTTP_METHOD_DELETE)
                     /*
+                     * gmm_state_registered()
+                     *
                      * - AMF_NETWORK_INITIATED_IMPLICIT_DE_REGISTERED
                      * 1. Implicit Timer Expiration
                      * 2. UDM_SDM_Unsubscribe
@@ -978,7 +1261,8 @@ void gmm_state_registered(ogs_fsm_t *s, amf_event_t *e)
                      * 5. PDUSessionResourceReleaseCommand +
                      *    PDU session release command
                      * 6. PDUSessionResourceReleaseResponse
-                     * 7. AM_Policy_Association_Termination
+                     * 7. Authentication Result Removal
+                     * 8. AM_Policy_Association_Termination
                      *
                      * - AMF_NETWORK_INITIATED_EXPLICIT_DE_REGISTERED
                      * 1. UDM_UECM_DeregistrationNotification
@@ -989,9 +1273,10 @@ void gmm_state_registered(ogs_fsm_t *s, amf_event_t *e)
                      * 6. PDUSessionResourceReleaseCommand +
                      *    PDU session release command
                      * 7. PDUSessionResourceReleaseResponse
-                     * 8. AM_Policy_Association_Termination
-                     * 9.  Deregistration accept
-                     * 10. Signalling Connecion Release
+                     * 8. Authentication Result Removal
+                     * 9. AM_Policy_Association_Termination
+                     * 10.Deregistration accept
+                     * 11.Signalling Connecion Release
                      */
                     if (state ==
                             AMF_NETWORK_INITIATED_IMPLICIT_DE_REGISTERED ||
@@ -1005,19 +1290,48 @@ void gmm_state_registered(ogs_fsm_t *s, amf_event_t *e)
                                 amf_ue, state, NULL);
                         ogs_expect(r == OGS_OK);
                         ogs_assert(r != OGS_ERROR);
+                    } else if (state == AMF_UE_INITIATED_DE_REGISTERED) {
+/*
+ * Issues: #4209
+ *
+ * gmm_state_registered()
+ *
+ * Ignore SDM subscription DELETE response.
+ *
+ * In some scenarios, a DELETE response for SDM_SUBSCRIPTIONS may arrive
+ * while the AMF is already handling a subsequent Registration Request
+ * (Integrity Protected). In this code path, the DELETE response is not
+ * relevant and does not require any further processing.
+ *
+ * The response is intentionally ignored to avoid unnecessary handling.
+ */
+                        ogs_warn("[%s] Ignoring SDM_SUBSCRIPTIONS DELETE "
+                                "response [%d] in (%s:%s)",
+                                amf_ue->supi, sbi_message->res_status,
+                                sbi_message->h.method,
+                                sbi_message->h.resource.component[1]);
+
+                        UDM_SDM_CLEAR(amf_ue);
                     } else {
-                        ogs_fatal("Invalid state [%d]", state);
+                        ogs_fatal("[%s:%d] Invalid state [%d] in (%s:%s)",
+                                amf_ue->supi, state, sbi_message->res_status,
+                                sbi_message->h.method,
+                                sbi_message->h.resource.component[1]);
                         ogs_assert_if_reached();
                     }
                     break;
                 DEFAULT
-                    ogs_warn("[%s] Ignore invalid HTTP method [%s]",
-                            amf_ue->suci, sbi_message->h.method);
+                    ogs_error("[%s] Ignore invalid HTTP method [%d] in (%s:%s)",
+                            amf_ue->supi, sbi_message->res_status,
+                            sbi_message->h.method,
+                            sbi_message->h.resource.component[1]);
                 END
                 break;
 
             DEFAULT
-                ogs_error("Invalid resource name [%s]",
+                ogs_fatal("[%s] Invalid resource name [%d] in (%s:%s)",
+                        amf_ue->supi, sbi_message->res_status,
+                        sbi_message->h.method,
                         sbi_message->h.resource.component[1]);
                 ogs_assert_if_reached();
             END
@@ -1040,38 +1354,40 @@ void gmm_state_registered(ogs_fsm_t *s, amf_event_t *e)
                 CASE(OGS_SBI_HTTP_METHOD_PATCH)
                     SWITCH(sbi_message->h.resource.component[2])
                     CASE(OGS_SBI_RESOURCE_NAME_AMF_3GPP_ACCESS)
-                        /*
-                         * - AMF_NETWORK_INITIATED_IMPLICIT_DE_REGISTERED
-                         * 1. Implicit Timer Expiration
-                         * 2. UDM_SDM_Unsubscribe
-                         * 3. UDM_UECM_Deregisration
-                         * 4. Authentication Result Removal
-                         * 5. PDU session release request
-                         * 6. PDUSessionResourceReleaseCommand +
-                         *    PDU session release command
-                         * 7. PDUSessionResourceReleaseResponse
-                         * 8. AM_Policy_Association_Termination
-                         *
-                         * - AMF_NETWORK_INITIATED_EXPLICIT_DE_REGISTERED
-                         * 1. UDM_UECM_DeregistrationNotification
-                         * 2. Deregistration request
-                         * 3. UDM_SDM_Unsubscribe
-                         * 4. UDM_UECM_Deregisration
-                         * 5. Authentication Result Removal
-                         * 6. PDU session release request
-                         * 7. PDUSessionResourceReleaseCommand +
-                         *    PDU session release command
-                         * 8. PDUSessionResourceReleaseResponse
-                         * 9. AM_Policy_Association_Termination
-                         * 10. Deregistration accept
-                         * 11. Signalling Connecion Release
-                         */
+                    /*
+                     * gmm_state_registered()
+                     *
+                     * - AMF_NETWORK_INITIATED_IMPLICIT_DE_REGISTERED
+                     * 1. Implicit Timer Expiration
+                     * 2. UDM_SDM_Unsubscribe
+                     * 3. UDM_UECM_Deregisration
+                     * 4. PDU session release request
+                     * 5. PDUSessionResourceReleaseCommand +
+                     *    PDU session release command
+                     * 6. PDUSessionResourceReleaseResponse
+                     * 7. Authentication Result Removal
+                     * 8. AM_Policy_Association_Termination
+                     *
+                     * - AMF_NETWORK_INITIATED_EXPLICIT_DE_REGISTERED
+                     * 1. UDM_UECM_DeregistrationNotification
+                     * 2. Deregistration request
+                     * 3. UDM_SDM_Unsubscribe
+                     * 4. UDM_UECM_Deregisration
+                     * 5. PDU session release request
+                     * 6. PDUSessionResourceReleaseCommand +
+                     *    PDU session release command
+                     * 7. PDUSessionResourceReleaseResponse
+                     * 8. Authentication Result Removal
+                     * 9. AM_Policy_Association_Termination
+                     * 10.Deregistration accept
+                     * 11.Signalling Connecion Release
+                     */
                         if (state ==
                                 AMF_NETWORK_INITIATED_IMPLICIT_DE_REGISTERED ||
                             state ==
                                 AMF_NETWORK_INITIATED_EXPLICIT_DE_REGISTERED) {
 
-                            if (amf_ue->confirmation_for_5g_aka.resource_uri) {
+                            if (CHECK_5G_AKA_CONFIRMATION(amf_ue)) {
                                 r = amf_ue_sbi_discover_and_send(
                                         OGS_SBI_SERVICE_TYPE_NAUSF_AUTH,
                                         NULL,
@@ -1081,9 +1397,12 @@ void gmm_state_registered(ogs_fsm_t *s, amf_event_t *e)
                                 ogs_assert(r != OGS_ERROR);
 
                             } else {
+                                memset(&param, 0, sizeof(param));
+                                param.ue_location = true;
+                                param.ue_timezone = true;
 
                                 amf_sbi_send_release_all_sessions(
-                                        NULL, amf_ue, state);
+                                        NULL, amf_ue, state, &param);
 
                                 if (!AMF_SESSION_RELEASE_PENDING(amf_ue) &&
                                     amf_sess_xact_count(amf_ue) == xact_count) {
@@ -1129,7 +1448,8 @@ void gmm_state_registered(ogs_fsm_t *s, amf_event_t *e)
             CASE(OGS_SBI_RESOURCE_NAME_POLICIES)
                 SWITCH(sbi_message->h.method)
                 CASE(OGS_SBI_HTTP_METHOD_POST)
-                    if (sbi_message->res_status != OGS_SBI_HTTP_STATUS_CREATED) {
+                    if (sbi_message->res_status !=
+                            OGS_SBI_HTTP_STATUS_CREATED) {
                         ogs_error("[%s] HTTP response error [%d]",
                                 amf_ue->supi, sbi_message->res_status);
                     }
@@ -1138,6 +1458,8 @@ void gmm_state_registered(ogs_fsm_t *s, amf_event_t *e)
 
                 CASE(OGS_SBI_HTTP_METHOD_DELETE)
                     /*
+                     * gmm_state_registered()
+                     *
                      * - AMF_NETWORK_INITIATED_IMPLICIT_DE_REGISTERED
                      * 1. Implicit Timer Expiration
                      * 2. UDM_SDM_Unsubscribe
@@ -1146,7 +1468,8 @@ void gmm_state_registered(ogs_fsm_t *s, amf_event_t *e)
                      * 5. PDUSessionResourceReleaseCommand +
                      *    PDU session release command
                      * 6. PDUSessionResourceReleaseResponse
-                     * 7. AM_Policy_Association_Termination
+                     * 7. Authentication Result Removal
+                     * 8. AM_Policy_Association_Termination
                      *
                      * - AMF_NETWORK_INITIATED_EXPLICIT_DE_REGISTERED
                      * 1. UDM_UECM_DeregistrationNotification
@@ -1157,9 +1480,10 @@ void gmm_state_registered(ogs_fsm_t *s, amf_event_t *e)
                      * 6. PDUSessionResourceReleaseCommand +
                      *    PDU session release command
                      * 7. PDUSessionResourceReleaseResponse
-                     * 8. AM_Policy_Association_Termination
-                     * 9. Deregistration accept
-                     * 10.Signalling Connecion Release
+                     * 8. Authentication Result Removal
+                     * 9. AM_Policy_Association_Termination
+                     * 10.Deregistration accept
+                     * 11.Signalling Connecion Release
                      */
                     if (state == AMF_NETWORK_INITIATED_IMPLICIT_DE_REGISTERED) {
                         ogs_warn("[%s] Implicit De-registered", amf_ue->supi);
@@ -1239,9 +1563,14 @@ void gmm_state_registered(ogs_fsm_t *s, amf_event_t *e)
                     }
 
                     xact_count = amf_sess_xact_count(amf_ue);
+
+                    memset(&param, 0, sizeof(param));
+                    param.ue_location = true;
+                    param.ue_timezone = true;
+
                     amf_sbi_send_release_all_sessions(
                             ran_ue_find_by_id(amf_ue->ran_ue_id), amf_ue,
-                            AMF_RELEASE_SM_CONTEXT_NO_STATE);
+                            AMF_RELEASE_SM_CONTEXT_NO_STATE, &param);
 
                     if (!AMF_SESSION_RELEASE_PENDING(amf_ue) &&
                         amf_sess_xact_count(amf_ue) == xact_count) {
@@ -1292,6 +1621,8 @@ static void common_register_state(ogs_fsm_t *s, amf_event_t *e,
     amf_sess_t *sess = NULL;
     ogs_nas_5gs_message_t *nas_message = NULL;
     ogs_nas_security_header_type_t h;
+
+    amf_nsmf_pdusession_sm_context_param_t param;
 
     ogs_assert(e);
 
@@ -1349,13 +1680,15 @@ static void common_register_state(ogs_fsm_t *s, amf_event_t *e,
                 amf_metrics_inst_global_inc(AMF_METR_GLOB_CTR_RM_REG_MOB_REQ);
                 break;
             case OGS_NAS_5GS_REGISTRATION_TYPE_PERIODIC_UPDATING:
-                amf_metrics_inst_global_inc(AMF_METR_GLOB_CTR_RM_REG_PERIOD_REQ);
+                amf_metrics_inst_global_inc(
+                        AMF_METR_GLOB_CTR_RM_REG_PERIOD_REQ);
                 break;
             case OGS_NAS_5GS_REGISTRATION_TYPE_EMERGENCY:
                 amf_metrics_inst_global_inc(AMF_METR_GLOB_CTR_RM_REG_EMERG_REQ);
                 break;
             default:
-                ogs_error("Unknown reg_type[%d]", amf_ue->nas.registration.value);
+                ogs_error("Unknown reg_type[%d]",
+                        amf_ue->nas.registration.value);
             }
 
             if (gmm_cause != OGS_5GMM_CAUSE_REQUEST_ACCEPTED) {
@@ -1374,7 +1707,8 @@ static void common_register_state(ogs_fsm_t *s, amf_event_t *e,
                 ogs_sbi_discovery_option_t *discovery_option = NULL;
                 ogs_guami_t guami;
 
-                amf_ue->amf_ue_context_transfer_state = UE_CONTEXT_INITIAL_STATE;
+                amf_ue->amf_ue_context_transfer_state =
+                    UE_CONTEXT_INITIAL_STATE;
 
                 discovery_option = ogs_sbi_discovery_option_new();
                 ogs_assert(discovery_option);
@@ -1445,7 +1779,8 @@ static void common_register_state(ogs_fsm_t *s, amf_event_t *e,
                     if (!UDM_SDM_SUBSCRIBED(amf_ue)) {
                         r = amf_ue_sbi_discover_and_send(
                                 OGS_SBI_SERVICE_TYPE_NUDM_UECM, NULL,
-                                amf_nudm_uecm_build_registration, amf_ue, 0, NULL);
+                                amf_nudm_uecm_build_registration,
+                                amf_ue, 0, NULL);
                         ogs_expect(r == OGS_OK);
                         ogs_assert(r != OGS_ERROR);
                         OGS_FSM_TRAN(s, &gmm_state_initial_context_setup);
@@ -1474,9 +1809,13 @@ static void common_register_state(ogs_fsm_t *s, amf_event_t *e,
                     OGS_FSM_TRAN(s, &gmm_state_registered);
 
             } else {
+                memset(&param, 0, sizeof(param));
+                param.ue_location = true;
+                param.ue_timezone = true;
 
                 amf_sbi_send_release_all_sessions(
-                        ran_ue, amf_ue, AMF_RELEASE_SM_CONTEXT_NO_STATE);
+                        ran_ue, amf_ue,
+                        AMF_RELEASE_SM_CONTEXT_NO_STATE, &param);
 
                 if (!AMF_SESSION_RELEASE_PENDING(amf_ue) &&
                     amf_sess_xact_count(amf_ue) == xact_count) {
@@ -1496,10 +1835,11 @@ static void common_register_state(ogs_fsm_t *s, amf_event_t *e,
             ogs_info("Service request");
 
             if (state != GMM_COMMON_STATE_REGISTERED) {
-                ogs_info("[%s] Handling service request failed [Not registered]",
-                            amf_ue->suci);
+                ogs_info("[%s] Handling service request failed "
+                        "[Not registered]", amf_ue->suci);
                 r = nas_5gs_send_service_reject(ran_ue, amf_ue,
-                    OGS_5GMM_CAUSE_UE_IDENTITY_CANNOT_BE_DERIVED_BY_THE_NETWORK);
+                    OGS_5GMM_CAUSE_UE_IDENTITY_CANNOT_BE_DERIVED_BY_THE_NETWORK
+                    );
                 ogs_expect(r == OGS_OK);
                 ogs_assert(r != OGS_ERROR);
                 AMF_RESTORE_CONTEXT_ON_FAILURE(amf_ue, s);
@@ -1521,7 +1861,8 @@ static void common_register_state(ogs_fsm_t *s, amf_event_t *e,
             if (!AMF_UE_HAVE_SUCI(amf_ue)) {
                 ogs_info("Service request : Unknown UE");
                 r = nas_5gs_send_service_reject(ran_ue, amf_ue,
-                    OGS_5GMM_CAUSE_UE_IDENTITY_CANNOT_BE_DERIVED_BY_THE_NETWORK);
+                    OGS_5GMM_CAUSE_UE_IDENTITY_CANNOT_BE_DERIVED_BY_THE_NETWORK
+                    );
                 ogs_expect(r == OGS_OK);
                 ogs_assert(r != OGS_ERROR);
                 AMF_RESTORE_CONTEXT_ON_FAILURE(amf_ue, s);
@@ -1531,7 +1872,8 @@ static void common_register_state(ogs_fsm_t *s, amf_event_t *e,
             if (!h.integrity_protected || !SECURITY_CONTEXT_IS_VALID(amf_ue)) {
                 ogs_error("No Security Context");
                 r = nas_5gs_send_service_reject(ran_ue, amf_ue,
-                    OGS_5GMM_CAUSE_UE_IDENTITY_CANNOT_BE_DERIVED_BY_THE_NETWORK);
+                    OGS_5GMM_CAUSE_UE_IDENTITY_CANNOT_BE_DERIVED_BY_THE_NETWORK
+                    );
                 ogs_expect(r == OGS_OK);
                 ogs_assert(r != OGS_ERROR);
                 AMF_RESTORE_CONTEXT_ON_FAILURE(amf_ue, s);
@@ -1598,8 +1940,12 @@ static void common_register_state(ogs_fsm_t *s, amf_event_t *e,
                 break;
             }
 
+            memset(&param, 0, sizeof(param));
+            param.ue_location = true;
+            param.ue_timezone = true;
+
             amf_sbi_send_release_all_sessions(
-                    ran_ue, amf_ue, AMF_RELEASE_SM_CONTEXT_NO_STATE);
+                    ran_ue, amf_ue, AMF_RELEASE_SM_CONTEXT_NO_STATE, &param);
 
             if (!AMF_SESSION_RELEASE_PENDING(amf_ue) &&
                 amf_sess_xact_count(amf_ue) == xact_count) {
@@ -1751,6 +2097,7 @@ void gmm_state_authentication(ogs_fsm_t *s, amf_event_t *e)
 
     switch (e->h.id) {
     case OGS_FSM_ENTRY_SIG:
+        amf_ue->auth_synch_fail_count = 0;
         break;
     case OGS_FSM_EXIT_SIG:
         break;
@@ -1822,7 +2169,17 @@ void gmm_state_authentication(ogs_fsm_t *s, amf_event_t *e)
                 return;
 
             case OGS_5GMM_CAUSE_SYNCH_FAILURE:
-                ogs_warn("Authentication failure(Synch failure)");
+                ogs_warn("[%s] Authentication failure(Synch failure[count=%d])",
+                        amf_ue->suci, amf_ue->auth_synch_fail_count);
+
+                amf_ue->auth_synch_fail_count++;
+
+                if (amf_ue->auth_synch_fail_count >= 2) {
+                    ogs_warn("[%s] Too many authentication synch failures, "
+                            "sending AUTHENTICATION REJECT", amf_ue->suci);
+                    break;
+                }
+
                 if (authentication_failure_parameter->length != OGS_AUTS_LEN) {
                     ogs_error("Invalid AUTS Length [%d]",
                             authentication_failure_parameter->length);
@@ -2020,6 +2377,14 @@ void gmm_state_authentication(ogs_fsm_t *s, amf_event_t *e)
                      */
                     ogs_error("[%s] Ignore SBI message", amf_ue->supi);
                     break;
+                CASE(OGS_SBI_HTTP_METHOD_PATCH)
+                    /*
+                     * Issue #4074
+                     *
+                     * We need to ignore this message in this state.
+                     */
+                    ogs_error("[%s] Ignore SBI message", amf_ue->supi);
+                    break;
                 DEFAULT
                     ogs_error("[%s] Invalid HTTP method [%s]",
                             amf_ue->suci, sbi_message->h.method);
@@ -2038,20 +2403,59 @@ void gmm_state_authentication(ogs_fsm_t *s, amf_event_t *e)
             if ((sbi_message->res_status != OGS_SBI_HTTP_STATUS_OK) &&
                 (sbi_message->res_status != OGS_SBI_HTTP_STATUS_CREATED) &&
                 (sbi_message->res_status != OGS_SBI_HTTP_STATUS_NO_CONTENT)) {
-                ogs_error("[%s] HTTP response error [%d]",
-                          amf_ue->supi, sbi_message->res_status);
+                ogs_error("[%s] HTTP response error [%d] in (%s:%s)",
+                        amf_ue->supi, sbi_message->res_status,
+                        sbi_message->h.method,
+                        sbi_message->h.resource.component[1]);
             }
 
             SWITCH(sbi_message->h.resource.component[1])
             CASE(OGS_SBI_RESOURCE_NAME_AM_DATA)
             CASE(OGS_SBI_RESOURCE_NAME_SMF_SELECT_DATA)
             CASE(OGS_SBI_RESOURCE_NAME_UE_CONTEXT_IN_SMF_DATA)
-            CASE(OGS_SBI_RESOURCE_NAME_SDM_SUBSCRIPTIONS)
-                ogs_error("[%s] Ignore SBI message", amf_ue->supi);
+                ogs_error("[%s] Ignore SBI message [%d] in (%s:%s)",
+                        amf_ue->supi, sbi_message->res_status,
+                        sbi_message->h.method,
+                        sbi_message->h.resource.component[1]);
                 break;
 
+            CASE(OGS_SBI_RESOURCE_NAME_SDM_SUBSCRIPTIONS)
+                SWITCH(sbi_message->h.method)
+                CASE(OGS_SBI_HTTP_METHOD_DELETE)
+/*
+ * Issues: #4209
+ *
+ * gmm_state_authentication()
+ *
+ * Ignore SDM subscription DELETE response.
+ *
+ * In some scenarios, a DELETE response for SDM_SUBSCRIPTIONS may arrive
+ * while the AMF is already handling a subsequent Registration Request
+ * (Integrity Protected). In this code path, the DELETE response is not
+ * relevant and does not require any further processing.
+ *
+ * The response is intentionally ignored to avoid unnecessary handling.
+ */
+                    ogs_warn("[%s] Ignoring SDM_SUBSCRIPTIONS DELETE response"
+                            "[%d] in (%s:%s)",
+                            amf_ue->supi, sbi_message->res_status,
+                            sbi_message->h.method,
+                            sbi_message->h.resource.component[1]);
+
+                    UDM_SDM_CLEAR(amf_ue);
+                    break;
+                DEFAULT
+                    ogs_error("[%s] Ignoring invalid HTTP method"
+                            "[%d] in (%s:%s)",
+                            amf_ue->supi, sbi_message->res_status,
+                            sbi_message->h.method,
+                            sbi_message->h.resource.component[1]);
+                END
+                break;
             DEFAULT
-                ogs_error("Invalid resource name [%s]",
+                ogs_fatal("[%s] Invalid resource name [%d] in (%s:%s)",
+                        amf_ue->supi, sbi_message->res_status,
+                        sbi_message->h.method,
                         sbi_message->h.resource.component[1]);
                 ogs_assert_if_reached();
             END
@@ -2062,13 +2466,16 @@ void gmm_state_authentication(ogs_fsm_t *s, amf_event_t *e)
             CASE(OGS_SBI_RESOURCE_NAME_POLICIES)
                 SWITCH(sbi_message->h.method)
                 CASE(OGS_SBI_HTTP_METHOD_POST)
-                    if (sbi_message->res_status != OGS_SBI_HTTP_STATUS_CREATED) {
+                    if (sbi_message->res_status !=
+                            OGS_SBI_HTTP_STATUS_CREATED) {
                         ogs_error("[%s] HTTP response error [%d]",
                                 amf_ue->supi, sbi_message->res_status);
                     }
                     ogs_error("[%s] Ignore SBI message", amf_ue->supi);
                     break;
-
+                CASE(OGS_SBI_HTTP_METHOD_DELETE)
+                    ogs_error("[%s] Ignore SBI message", amf_ue->supi);
+                    break;
                 DEFAULT
                     ogs_error("Unknown method [%s]", sbi_message->h.method);
                     ogs_assert_if_reached();
@@ -2191,7 +2598,8 @@ void gmm_state_security_mode(ogs_fsm_t *s, amf_event_t *e)
                 break;
             }
 
-            if (amf_ue->amf_ue_context_transfer_state == UE_CONTEXT_TRANSFER_NEW_AMF_STATE) {
+            if (amf_ue->amf_ue_context_transfer_state ==
+                    UE_CONTEXT_TRANSFER_NEW_AMF_STATE) {
                 /*
                 * UE context transfer message has been sent
                 * to old AMF after Registration request.
@@ -2219,7 +2627,8 @@ void gmm_state_security_mode(ogs_fsm_t *s, amf_event_t *e)
                 ogs_expect(r == OGS_OK);
                 ogs_assert(r != OGS_ERROR);
 
-                amf_ue->amf_ue_context_transfer_state = REGISTRATION_STATUS_UPDATE_NEW_AMF_STATE;
+                amf_ue->amf_ue_context_transfer_state =
+                    REGISTRATION_STATUS_UPDATE_NEW_AMF_STATE;
                 break;
             }
 
@@ -2279,7 +2688,8 @@ void gmm_state_security_mode(ogs_fsm_t *s, amf_event_t *e)
         case OGS_NAS_5GS_SERVICE_REQUEST:
             ogs_info("[%s] Service request", amf_ue->supi);
             r = nas_5gs_send_service_reject(ran_ue, amf_ue,
-                    OGS_5GMM_CAUSE_UE_IDENTITY_CANNOT_BE_DERIVED_BY_THE_NETWORK);
+                    OGS_5GMM_CAUSE_UE_IDENTITY_CANNOT_BE_DERIVED_BY_THE_NETWORK
+                    );
             ogs_expect(r == OGS_OK);
             ogs_assert(r != OGS_ERROR);
             OGS_FSM_TRAN(s, &gmm_state_exception);
@@ -2360,18 +2770,22 @@ void gmm_state_security_mode(ogs_fsm_t *s, amf_event_t *e)
             CASE(OGS_SBI_RESOURCE_NAME_UE_CONTEXTS)
                 SWITCH(sbi_message->h.resource.component[2])
                 CASE(OGS_SBI_RESOURCE_NAME_TRANSFER_UPDATE)
-                    if (amf_ue->amf_ue_context_transfer_state != REGISTRATION_STATUS_UPDATE_NEW_AMF_STATE) {
+                    if (amf_ue->amf_ue_context_transfer_state !=
+                            REGISTRATION_STATUS_UPDATE_NEW_AMF_STATE) {
                         ogs_error("UE context transfer state not correct");
                     }
                     if (sbi_message->res_status != OGS_SBI_HTTP_STATUS_OK) {
                         ogs_error("[%s] HTTP response error [%d]",
                                 amf_ue->supi, sbi_message->res_status);
                     }
-                    r = amf_namf_comm_handle_registration_status_update_response(sbi_message, amf_ue);
+                    r =
+                    amf_namf_comm_handle_registration_status_update_response(
+                            sbi_message, amf_ue);
                     ogs_expect(r == OGS_OK);
                     ogs_assert(r != OGS_ERROR);
 
-                    amf_ue->amf_ue_context_transfer_state = UE_CONTEXT_INITIAL_STATE;
+                    amf_ue->amf_ue_context_transfer_state =
+                        UE_CONTEXT_INITIAL_STATE;
 
                     /* Continue with registration */
                     ogs_kdf_kgnb_and_kn3iwf(
@@ -2386,13 +2800,15 @@ void gmm_state_security_mode(ogs_fsm_t *s, amf_event_t *e)
                     ogs_expect(r == OGS_OK);
                     ogs_assert(r != OGS_ERROR);
 
-                    if (amf_ue->nas.message_type == OGS_NAS_5GS_REGISTRATION_REQUEST) {
+                    if (amf_ue->nas.message_type ==
+                            OGS_NAS_5GS_REGISTRATION_REQUEST) {
                         OGS_FSM_TRAN(s, &gmm_state_initial_context_setup);
                     } else if (amf_ue->nas.message_type ==
                                 OGS_NAS_5GS_SERVICE_REQUEST) {
                         OGS_FSM_TRAN(s, &gmm_state_registered);
                     } else {
-                        ogs_fatal("Invalid OGS_NAS_5GS[%d]", amf_ue->nas.message_type);
+                        ogs_fatal("Invalid OGS_NAS_5GS[%d]",
+                                amf_ue->nas.message_type);
                         ogs_assert_if_reached();
                     }
                     break;
@@ -2461,7 +2877,8 @@ void gmm_state_initial_context_setup(ogs_fsm_t *s, amf_event_t *e)
 
     ogs_sbi_message_t *sbi_message = NULL;
 
-    gmm_configuration_update_command_param_t param;
+    gmm_configuration_update_command_param_t gmm_param;
+    amf_nsmf_pdusession_sm_context_param_t nsmf_param;
 
     ogs_assert(s);
     ogs_assert(e);
@@ -2580,6 +2997,32 @@ void gmm_state_initial_context_setup(ogs_fsm_t *s, amf_event_t *e)
             break;
 
         CASE(OGS_SBI_SERVICE_NAME_NUDM_SDM)
+            if (!strcmp(sbi_message->h.resource.component[1],
+                        OGS_SBI_RESOURCE_NAME_SDM_SUBSCRIPTIONS) &&
+                !strcmp(sbi_message->h.method, OGS_SBI_HTTP_METHOD_DELETE)) {
+/*
+ * Issues: #4209
+ *
+ * gmm_state_initial_context_setup()
+ *
+ * Ignore SDM subscription DELETE response.
+ *
+ * In some scenarios, a DELETE response for SDM_SUBSCRIPTIONS may arrive
+ * while the AMF is already handling a subsequent Registration Request
+ * (Integrity Protected). In this code path, the DELETE response is not
+ * relevant and does not require any further processing.
+ *
+ * The response is intentionally ignored to avoid unnecessary handling.
+ */
+                ogs_warn("[%s] Ignoring SDM_SUBSCRIPTIONS DELETE response"
+                        "[%d] in (%s:%s)",
+                        amf_ue->supi, sbi_message->res_status,
+                        sbi_message->h.method,
+                        sbi_message->h.resource.component[1]);
+
+                UDM_SDM_CLEAR(amf_ue);
+                break;
+            }
 
             SWITCH(sbi_message->h.resource.component[1])
             CASE(OGS_SBI_RESOURCE_NAME_AM_DATA)
@@ -2588,8 +3031,10 @@ void gmm_state_initial_context_setup(ogs_fsm_t *s, amf_event_t *e)
             CASE(OGS_SBI_RESOURCE_NAME_SDM_SUBSCRIPTIONS)
                 if ((sbi_message->res_status != OGS_SBI_HTTP_STATUS_OK) &&
                     (sbi_message->res_status != OGS_SBI_HTTP_STATUS_CREATED)) {
-                    ogs_error("[%s] HTTP response error [%d]",
-                            amf_ue->supi, sbi_message->res_status);
+                    ogs_error("[%s] HTTP response error [%d] in (%s:%s)",
+                            amf_ue->supi, sbi_message->res_status,
+                            sbi_message->h.method,
+                            sbi_message->h.resource.component[1]);
                     r = nas_5gs_send_gmm_reject(
                             ran_ue_find_by_id(amf_ue->ran_ue_id), amf_ue,
                             OGS_5GMM_CAUSE_5GS_SERVICES_NOT_ALLOWED);
@@ -2602,15 +3047,18 @@ void gmm_state_initial_context_setup(ogs_fsm_t *s, amf_event_t *e)
                 rv = amf_nudm_sdm_handle_provisioned(
                         amf_ue, state, sbi_message);
                 if (rv != OGS_OK) {
-                    ogs_error("[%s] amf_nudm_sdm_handle_provisioned(%s) failed",
-                            amf_ue->supi, sbi_message->h.resource.component[1]);
+                    ogs_error("[%s] amf_nudm_sdm_handle_provisioned(%s:%s) "
+                            "failed", amf_ue->supi, sbi_message->h.method,
+                            sbi_message->h.resource.component[1]);
                     OGS_FSM_TRAN(&amf_ue->sm, &gmm_state_exception);
                     break;
                 }
                 break;
 
             DEFAULT
-                ogs_error("Invalid resource name [%s]",
+                ogs_fatal("[%s] Invalid resource name [%d] in (%s:%s)",
+                        amf_ue->supi, sbi_message->res_status,
+                        sbi_message->h.method,
                         sbi_message->h.resource.component[1]);
                 ogs_assert_if_reached();
             END
@@ -2750,9 +3198,9 @@ void gmm_state_initial_context_setup(ogs_fsm_t *s, amf_event_t *e)
              * Indication if the AMF wants to update these NAS parameters
              * without triggering a UE Registration procedure.
              */
-            memset(&param, 0, sizeof(param));
-            param.nitz = 1;
-            r = nas_5gs_send_configuration_update_command(amf_ue, &param);
+            memset(&gmm_param, 0, sizeof(gmm_param));
+            gmm_param.nitz = 1;
+            r = nas_5gs_send_configuration_update_command(amf_ue, &gmm_param);
             ogs_expect(r == OGS_OK);
             ogs_assert(r != OGS_ERROR);
 
@@ -2764,10 +3212,12 @@ void gmm_state_initial_context_setup(ogs_fsm_t *s, amf_event_t *e)
                 amf_metrics_inst_global_inc(AMF_METR_GLOB_CTR_RM_REG_MOB_SUCC);
                 break;
             case OGS_NAS_5GS_REGISTRATION_TYPE_PERIODIC_UPDATING:
-                amf_metrics_inst_global_inc(AMF_METR_GLOB_CTR_RM_REG_PERIOD_SUCC);
+                amf_metrics_inst_global_inc(
+                        AMF_METR_GLOB_CTR_RM_REG_PERIOD_SUCC);
                 break;
             case OGS_NAS_5GS_REGISTRATION_TYPE_EMERGENCY:
-                amf_metrics_inst_global_inc(AMF_METR_GLOB_CTR_RM_REG_EMERG_SUCC);
+                amf_metrics_inst_global_inc(
+                        AMF_METR_GLOB_CTR_RM_REG_EMERG_SUCC);
                 break;
             default:
                 ogs_error("Unknown reg_type[%d]",
@@ -2791,8 +3241,13 @@ void gmm_state_initial_context_setup(ogs_fsm_t *s, amf_event_t *e)
                 break;
             }
 
+            memset(&nsmf_param, 0, sizeof(nsmf_param));
+            nsmf_param.ue_location = true;
+            nsmf_param.ue_timezone = true;
+
             amf_sbi_send_release_all_sessions(
-                    ran_ue, amf_ue, AMF_RELEASE_SM_CONTEXT_NO_STATE);
+                    ran_ue, amf_ue,
+                    AMF_RELEASE_SM_CONTEXT_NO_STATE, &nsmf_param);
 
             if (!AMF_SESSION_RELEASE_PENDING(amf_ue) &&
                 amf_sess_xact_count(amf_ue) == xact_count) {
@@ -2904,6 +3359,8 @@ void gmm_state_exception(ogs_fsm_t *s, amf_event_t *e)
     ogs_nas_security_header_type_t h;
     ogs_sbi_message_t *sbi_message = NULL;
 
+    amf_nsmf_pdusession_sm_context_param_t param;
+
     ogs_assert(s);
     ogs_assert(e);
 
@@ -2925,7 +3382,8 @@ void gmm_state_exception(ogs_fsm_t *s, amf_event_t *e)
         AMF_UE_CLEAR_5GSM_MESSAGE(amf_ue);
         CLEAR_AMF_UE_ALL_TIMERS(amf_ue);
 
-        if (amf_ue->amf_ue_context_transfer_state == UE_CONTEXT_TRANSFER_NEW_AMF_STATE) {
+        if (amf_ue->amf_ue_context_transfer_state ==
+                UE_CONTEXT_TRANSFER_NEW_AMF_STATE) {
             /*
             * UE context transfer message has been sent
             * to old AMF after Registration request.
@@ -2953,15 +3411,20 @@ void gmm_state_exception(ogs_fsm_t *s, amf_event_t *e)
             ogs_expect(r == OGS_OK);
             ogs_assert(r != OGS_ERROR);
 
-            amf_ue->amf_ue_context_transfer_state = REGISTRATION_STATUS_UPDATE_NEW_AMF_STATE;
+            amf_ue->amf_ue_context_transfer_state =
+                REGISTRATION_STATUS_UPDATE_NEW_AMF_STATE;
             break;
         }
 
         xact_count = amf_sess_xact_count(amf_ue);
 
+        memset(&param, 0, sizeof(param));
+        param.ue_location = true;
+        param.ue_timezone = true;
+
         amf_sbi_send_release_all_sessions(
                 ran_ue_find_by_id(amf_ue->ran_ue_id), amf_ue,
-                AMF_RELEASE_SM_CONTEXT_NO_STATE);
+                AMF_RELEASE_SM_CONTEXT_NO_STATE, &param);
 
         if (!AMF_SESSION_RELEASE_PENDING(amf_ue) &&
             amf_sess_xact_count(amf_ue) == xact_count) {
@@ -3080,9 +3543,13 @@ void gmm_state_exception(ogs_fsm_t *s, amf_event_t *e)
                     OGS_FSM_TRAN(s, &gmm_state_registered);
 
             } else {
+                memset(&param, 0, sizeof(param));
+                param.ue_location = true;
+                param.ue_timezone = true;
 
                 amf_sbi_send_release_all_sessions(
-                        ran_ue, amf_ue, AMF_RELEASE_SM_CONTEXT_NO_STATE);
+                        ran_ue, amf_ue,
+                        AMF_RELEASE_SM_CONTEXT_NO_STATE, &param);
 
                 if (!AMF_SESSION_RELEASE_PENDING(amf_ue) &&
                     amf_sess_xact_count(amf_ue) == xact_count) {
@@ -3215,20 +3682,59 @@ void gmm_state_exception(ogs_fsm_t *s, amf_event_t *e)
             if ((sbi_message->res_status != OGS_SBI_HTTP_STATUS_OK) &&
                 (sbi_message->res_status != OGS_SBI_HTTP_STATUS_CREATED) &&
                 (sbi_message->res_status != OGS_SBI_HTTP_STATUS_NO_CONTENT)) {
-                ogs_error("[%s] HTTP response error [%d]",
-                          amf_ue->supi, sbi_message->res_status);
+                ogs_error("[%s] HTTP response error [%d] in (%s:%s)",
+                        amf_ue->supi, sbi_message->res_status,
+                        sbi_message->h.method,
+                        sbi_message->h.resource.component[1]);
             }
 
             SWITCH(sbi_message->h.resource.component[1])
             CASE(OGS_SBI_RESOURCE_NAME_AM_DATA)
             CASE(OGS_SBI_RESOURCE_NAME_SMF_SELECT_DATA)
             CASE(OGS_SBI_RESOURCE_NAME_UE_CONTEXT_IN_SMF_DATA)
-            CASE(OGS_SBI_RESOURCE_NAME_SDM_SUBSCRIPTIONS)
-                ogs_error("[%s] Ignore SBI message", amf_ue->supi);
+                ogs_error("[%s] Ignore SBI message [%d] in (%s:%s)",
+                        amf_ue->supi, sbi_message->res_status,
+                        sbi_message->h.method,
+                        sbi_message->h.resource.component[1]);
                 break;
 
+            CASE(OGS_SBI_RESOURCE_NAME_SDM_SUBSCRIPTIONS)
+                SWITCH(sbi_message->h.method)
+                CASE(OGS_SBI_HTTP_METHOD_DELETE)
+/*
+ * Issues: #4209
+ *
+ * gmm_state_exception()
+ *
+ * Ignore SDM subscription DELETE response.
+ *
+ * In some scenarios, a DELETE response for SDM_SUBSCRIPTIONS may arrive
+ * while the AMF is already handling a subsequent Registration Request
+ * (Integrity Protected). In this code path, the DELETE response is not
+ * relevant and does not require any further processing.
+ *
+ * The response is intentionally ignored to avoid unnecessary handling.
+ */
+                    ogs_warn("[%s] Ignoring SDM_SUBSCRIPTIONS DELETE response"
+                            "[%d] in (%s:%s)",
+                            amf_ue->supi, sbi_message->res_status,
+                            sbi_message->h.method,
+                            sbi_message->h.resource.component[1]);
+
+                    UDM_SDM_CLEAR(amf_ue);
+                    break;
+                DEFAULT
+                    ogs_error("[%s] Ignoring invalid HTTP method"
+                            "[%d] in (%s:%s)",
+                            amf_ue->supi, sbi_message->res_status,
+                            sbi_message->h.method,
+                            sbi_message->h.resource.component[1]);
+                END
+                break;
             DEFAULT
-                ogs_error("Invalid resource name [%s]",
+                ogs_fatal("[%s] Invalid resource name [%d] in (%s:%s)",
+                        amf_ue->supi, sbi_message->res_status,
+                        sbi_message->h.method,
                         sbi_message->h.resource.component[1]);
                 ogs_assert_if_reached();
             END
@@ -3239,7 +3745,8 @@ void gmm_state_exception(ogs_fsm_t *s, amf_event_t *e)
             CASE(OGS_SBI_RESOURCE_NAME_POLICIES)
                 SWITCH(sbi_message->h.method)
                 CASE(OGS_SBI_HTTP_METHOD_POST)
-                    if (sbi_message->res_status != OGS_SBI_HTTP_STATUS_CREATED) {
+                    if (sbi_message->res_status !=
+                            OGS_SBI_HTTP_STATUS_CREATED) {
                         ogs_error("[%s] HTTP response error [%d]",
                                 amf_ue->supi, sbi_message->res_status);
                     }
@@ -3264,23 +3771,33 @@ void gmm_state_exception(ogs_fsm_t *s, amf_event_t *e)
             CASE(OGS_SBI_RESOURCE_NAME_UE_CONTEXTS)
                 SWITCH(sbi_message->h.resource.component[2])
                 CASE(OGS_SBI_RESOURCE_NAME_TRANSFER_UPDATE)
-                    if (amf_ue->amf_ue_context_transfer_state != REGISTRATION_STATUS_UPDATE_NEW_AMF_STATE) {
+                    if (amf_ue->amf_ue_context_transfer_state !=
+                            REGISTRATION_STATUS_UPDATE_NEW_AMF_STATE) {
                         ogs_error("UE context transfer state not correct");
                     }
                     if (sbi_message->res_status != OGS_SBI_HTTP_STATUS_OK) {
                         ogs_error("[%s] HTTP response error [%d]",
                                 amf_ue->supi, sbi_message->res_status);
                     }
-                    r = amf_namf_comm_handle_registration_status_update_response(sbi_message, amf_ue);
+                    r =
+                    amf_namf_comm_handle_registration_status_update_response(
+                            sbi_message, amf_ue);
                     ogs_expect(r == OGS_OK);
                     ogs_assert(r != OGS_ERROR);
 
-                    amf_ue->amf_ue_context_transfer_state = UE_CONTEXT_INITIAL_STATE;
+                    amf_ue->amf_ue_context_transfer_state =
+                        UE_CONTEXT_INITIAL_STATE;
 
                     /* Continue with release command */
                     xact_count = amf_sess_xact_count(amf_ue);
+
+                    memset(&param, 0, sizeof(param));
+                    param.ue_location = true;
+                    param.ue_timezone = true;
+
                     amf_sbi_send_release_all_sessions(
-                            ran_ue, amf_ue, AMF_RELEASE_SM_CONTEXT_NO_STATE);
+                            ran_ue, amf_ue,
+                            AMF_RELEASE_SM_CONTEXT_NO_STATE, &param);
 
                     if (!AMF_SESSION_RELEASE_PENDING(amf_ue) &&
                         amf_sess_xact_count(amf_ue) == xact_count) {

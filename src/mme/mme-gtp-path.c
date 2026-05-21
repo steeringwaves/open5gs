@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2019-2024 by Sukchan Lee <acetcom@gmail.com>
+ * Copyright (C) 2019-2026 by Sukchan Lee <acetcom@gmail.com>
  *
  * This file is part of Open5GS.
  *
@@ -271,7 +271,6 @@ int mme_gtp_send_create_session_request(
     mme_ue_t *mme_ue = NULL;
     sgw_ue_t *sgw_ue = NULL;
 
-    ogs_assert(enb_ue);
     mme_ue = mme_ue_find_by_id(sess->mme_ue_id);
     ogs_assert(mme_ue);
     sgw_ue = sgw_ue_find_by_id(mme_ue->sgw_ue_id);
@@ -301,7 +300,10 @@ int mme_gtp_send_create_session_request(
     }
     xact->create_action = create_action;
     xact->local_teid = mme_ue->gn.mme_gn_teid;
-    xact->enb_ue_id = enb_ue->id;
+    if (enb_ue)
+        xact->enb_ue_id = enb_ue->id;
+    else
+        xact->enb_ue_id = OGS_INVALID_POOL_ID;
 
     rv = ogs_gtp_xact_commit(xact);
     ogs_expect(rv == OGS_OK);
@@ -321,7 +323,6 @@ int mme_gtp_send_modify_bearer_request(
     ogs_gtp2_header_t h;
     ogs_pkbuf_t *pkbuf = NULL;
 
-    ogs_assert(enb_ue);
     ogs_assert(mme_ue);
     sgw_ue = sgw_ue_find_by_id(mme_ue->sgw_ue_id);
     ogs_assert(sgw_ue);
@@ -345,7 +346,10 @@ int mme_gtp_send_modify_bearer_request(
     }
     xact->modify_action = modify_action;
     xact->local_teid = mme_ue->gn.mme_gn_teid;
-    xact->enb_ue_id = enb_ue->id;
+    if (enb_ue)
+        xact->enb_ue_id = enb_ue->id;
+    else
+        xact->enb_ue_id = OGS_INVALID_POOL_ID;
 
     rv = ogs_gtp_xact_commit(xact);
     ogs_expect(rv == OGS_OK);
@@ -362,7 +366,6 @@ int mme_gtp_send_delete_session_request(
     ogs_gtp_xact_t *xact = NULL;
     mme_ue_t *mme_ue = NULL;
 
-    ogs_assert(enb_ue);
     ogs_assert(action);
     ogs_assert(sess);
     mme_ue = mme_ue_find_by_id(sess->mme_ue_id);
@@ -388,7 +391,10 @@ int mme_gtp_send_delete_session_request(
     }
     xact->delete_action = action;
     xact->local_teid = mme_ue->gn.mme_gn_teid;
-    xact->enb_ue_id = enb_ue->id;
+    if (enb_ue)
+        xact->enb_ue_id = enb_ue->id;
+    else
+        xact->enb_ue_id = OGS_INVALID_POOL_ID;
     ogs_debug("delete_session_request - xact:%p, sess:%p", xact, sess);
 
     rv = ogs_gtp_xact_commit(xact);
@@ -403,7 +409,6 @@ void mme_gtp_send_delete_all_sessions(
     mme_sess_t *sess = NULL, *next_sess = NULL;
     sgw_ue_t *sgw_ue = NULL;
 
-    ogs_assert(enb_ue);
     ogs_assert(mme_ue);
     sgw_ue = sgw_ue_find_by_id(mme_ue->sgw_ue_id);
     ogs_assert(sgw_ue);

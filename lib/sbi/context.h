@@ -161,6 +161,7 @@ typedef struct ogs_sbi_nf_instance_s {
     int num_of_plmn_id;
 
     char *fqdn;
+    char *hnrf_uri; /* NRF Only */
 
 #define OGS_SBI_MAX_NUM_OF_IP_ADDRESS 8
     int num_of_ipv4;
@@ -215,8 +216,9 @@ typedef struct ogs_sbi_object_s {
          */
         ogs_time_t validity_timeout;
 #endif
-    } nf_type_array[OGS_SBI_MAX_NUM_OF_NF_TYPE],
-      service_type_array[OGS_SBI_MAX_NUM_OF_SERVICE_TYPE];
+      } nf_type_array[OGS_SBI_MAX_NUM_OF_NF_TYPE],
+        service_type_array[OGS_SBI_MAX_NUM_OF_SERVICE_TYPE],
+        home_nsmf_pdusession;
 
     ogs_list_t xact_list;
 
@@ -268,11 +270,30 @@ typedef struct ogs_sbi_xact_s {
 
     ogs_pool_id_t assoc_stream_id;
 
+    /*
+     * Optional user context attached to this SBI transaction.
+     *
+     * This pointer allows NF-specific code to associate arbitrary
+     * data with the transaction. The memory is owned by the
+     * transaction and will be released automatically when the
+     * transaction is removed via ogs_sbi_xact_remove().
+     *
+     * Typical usage:
+     *   - Store a snapshot of context identifiers needed when the
+     *     asynchronous SBI response arrives.
+     *   - Example: AMF stores a snapshot of RAN-UE ID because the
+     *     session's current RAN-UE may change before the response
+     *     (e.g., NG context release / re-establishment).
+     */
+    void *user_data;
+    void (*user_data_free)(void *user_data);
+
     int state;
     char *target_apiroot;
 
     ogs_sbi_object_t *sbi_object;
     ogs_pool_id_t sbi_object_id;
+
 } ogs_sbi_xact_t;
 
 typedef struct ogs_sbi_nf_service_s {
@@ -329,6 +350,9 @@ typedef struct ogs_sbi_subscription_data_s {
     ogs_time_t validity_duration;           /* valditiyTime(unit: usec) */
     ogs_timer_t *t_validity;                /* check validation */
     ogs_timer_t *t_patch;                   /* for sending PATCH */
+
+#define OGS_SBI_SUBSCRIPTION_DELETE_SENT  (1 << 0)
+    uint32_t flags;                         /* Subscription lifecycle flags */
 
     char *id;                               /* SubscriptionId */
     char *req_nf_instance_id;               /* reqNfInstanceId */
@@ -506,6 +530,7 @@ ogs_sbi_client_t *ogs_sbi_client_find_by_service_type(
         ogs_sbi_service_type_e service_type);
 
 void ogs_sbi_client_associate(ogs_sbi_nf_instance_t *nf_instance);
+bool nf_instance_has_usable_client(ogs_sbi_nf_instance_t *nf_instance);
 
 int ogs_sbi_default_client_port(OpenAPI_uri_scheme_e scheme);
 
@@ -604,6 +629,9 @@ bool ogs_sbi_discovery_option_requester_plmn_list_is_matched(
 bool ogs_sbi_discovery_option_target_plmn_list_is_matched(
         ogs_sbi_nf_instance_t *nf_instance,
         ogs_sbi_discovery_option_t *discovery_option);
+bool ogs_sbi_discovery_option_hnrf_uri_is_matched(
+        ogs_sbi_nf_instance_t *nf_instance,
+        ogs_sbi_discovery_option_t *discovery_option);
 
 void ogs_sbi_object_free(ogs_sbi_object_t *sbi_object);
 
@@ -632,6 +660,8 @@ void ogs_sbi_subscription_data_remove(
         ogs_sbi_subscription_data_t *subscription_data);
 void ogs_sbi_subscription_data_remove_all_by_nf_instance_id(
         char *nf_instance_id);
+void ogs_sbi_subscription_data_delete_and_remove_all_by_nf_instance_id(
+        const char *nf_instance_id);
 void ogs_sbi_subscription_data_remove_all(void);
 ogs_sbi_subscription_data_t *ogs_sbi_subscription_data_find(char *id);
 

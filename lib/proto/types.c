@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2019-2022 by Sukchan Lee <acetcom@gmail.com>
+ * Copyright (C) 2019-2024 by Sukchan Lee <acetcom@gmail.com>
  *
  * This file is part of Open5GS.
  *
@@ -129,8 +129,9 @@ char *ogs_plmn_id_to_string(const ogs_plmn_id_t *plmn_id, char *buf)
 }
 
 #define FQDN_3GPPNETWORK_ORG ".3gppnetwork.org"
-#define FQDN_5GC_MNC "5gc.mnc"
+#define FQDN_GPRS ".gprs"
 #define FQDN_MCC ".mcc"
+#define FQDN_MNC ".mnc"
 
 char *ogs_serving_network_name_from_plmn_id(const ogs_plmn_id_t *plmn_id)
 {
@@ -165,78 +166,65 @@ char *ogs_nssf_fqdn_from_plmn_id(const ogs_plmn_id_t *plmn_id)
             ogs_plmn_id_mnc(plmn_id), ogs_plmn_id_mcc(plmn_id));
 }
 
-char *ogs_home_network_domain_from_fqdn(char *fqdn)
+char *ogs_dnn_oi_from_plmn_id(const ogs_plmn_id_t *plmn_id)
 {
-    char *p = NULL;
+    return ogs_msprintf("mnc%03d.mcc%03d" FQDN_GPRS,
+            ogs_plmn_id_mnc(plmn_id), ogs_plmn_id_mcc(plmn_id));
+}
+
+char *ogs_dnn_oi_from_fqdn(char *fqdn)
+{
+    char *mnc_pos = NULL;
 
     ogs_assert(fqdn);
 
-    if (strlen(fqdn) <
-        strlen(FQDN_5GC_MNC "XXX" FQDN_MCC "XXX" FQDN_3GPPNETWORK_ORG)) {
+    /* Find ".mnc" from right side */
+    mnc_pos = ogs_strrstr(fqdn, FQDN_MNC);
+    if (!mnc_pos)
         return NULL;
-    }
 
-    p = fqdn + strlen(fqdn);
-    if (strncmp(p - strlen(FQDN_3GPPNETWORK_ORG),
-                FQDN_3GPPNETWORK_ORG, strlen(FQDN_3GPPNETWORK_ORG)) != 0) {
+    /* Ensure minimum required length for parsing */
+    if ((mnc_pos + strlen(FQDN_MNC) + 3 + strlen(FQDN_MCC) + 3) >
+        fqdn + strlen(fqdn))
         return NULL;
-    }
 
-    p -= (strlen(FQDN_3GPPNETWORK_ORG) + 3);
-    if (strncmp(p - strlen(FQDN_MCC),
-                FQDN_MCC, strlen(FQDN_MCC)) != 0) {
+    /* Validate that ".mnc" is followed by 3 digits */
+    if (!isdigit(mnc_pos[4]) ||
+        !isdigit(mnc_pos[5]) ||
+        !isdigit(mnc_pos[6]))
         return NULL;
-    }
 
-    p -= (strlen(FQDN_MCC) + 3);
-    if (strncmp(p - strlen(FQDN_5GC_MNC),
-                FQDN_5GC_MNC, strlen(FQDN_5GC_MNC)) != 0) {
+    /* Check format ".mcc" after MNC */
+    if (strncmp(mnc_pos + 7, FQDN_MCC, strlen(FQDN_MCC)) != 0)
         return NULL;
-    }
 
-    return p - strlen(FQDN_5GC_MNC);
+    /* Validate MCC digits */
+    if (!isdigit(mnc_pos[11]) ||
+        !isdigit(mnc_pos[12]) ||
+        !isdigit(mnc_pos[13]))
+        return NULL;
+
+    return mnc_pos+1;   /* caller will parse MNC, MCC from here */
 }
 
 uint16_t ogs_plmn_id_mcc_from_fqdn(char *fqdn)
 {
-    char mcc[4];
-    char *p = NULL;
-
-    ogs_assert(fqdn);
-
-    p = ogs_home_network_domain_from_fqdn(fqdn);
-    if (p == NULL) {
+    char *p = ogs_dnn_oi_from_fqdn(fqdn);
+    if (!p) {
         ogs_error("Invalid FQDN [%d:%s]", (int)strlen(fqdn), fqdn);
         return 0;
     }
-
-    p += strlen(FQDN_5GC_MNC) + 3 + strlen(FQDN_MCC);
-
-    memcpy(mcc, p, 3);
-    mcc[3] = 0;
-
-    return atoi(mcc);
+    return (uint16_t)atoi(p + 10); /* after ".mcc" */
 }
 
 uint16_t ogs_plmn_id_mnc_from_fqdn(char *fqdn)
 {
-    char mnc[4];
-    char *p = NULL;
-
-    ogs_assert(fqdn);
-
-    p = ogs_home_network_domain_from_fqdn(fqdn);
-    if (p == NULL) {
+    char *p = ogs_dnn_oi_from_fqdn(fqdn);
+    if (!p) {
         ogs_error("Invalid FQDN [%d:%s]", (int)strlen(fqdn), fqdn);
         return 0;
     }
-
-    p += strlen(FQDN_5GC_MNC);
-
-    memcpy(mnc, p, 3);
-    mnc[3] = 0;
-
-    return atoi(mnc);
+    return (uint16_t)atoi(p + 3); /* after "mnc" */
 }
 
 uint32_t ogs_amf_id_hexdump(const ogs_amf_id_t *amf_id)
@@ -459,26 +447,55 @@ int ogs_pco_parse(ogs_pco_t *pco, unsigned char *data, int data_len)
 
     memset(pco, 0, sizeof(ogs_pco_t));
 
+    if (data_len < 1) {
+        ogs_error("PCO/EPCO too short [%d]", data_len);
+        return -EINVAL;
+    }
+
     pco->ext = source->ext;
     pco->configuration_protocol = source->configuration_protocol;
     size++;
 
     while(size < data_len && i < OGS_MAX_NUM_OF_PROTOCOL_OR_CONTAINER_ID) {
         ogs_pco_id_t *id = &pco->ids[i];
-        ogs_assert(size + sizeof(id->id) <= data_len);
+
+        if (size + (int)sizeof(id->id) > data_len) {
+            ogs_error("PCO/EPCO truncated before Container-ID "
+                    "[offset:%d len:%d]", size, data_len);
+            return -EINVAL;
+        }
         memcpy(&id->id, data + size, sizeof(id->id));
         id->id = be16toh(id->id);
         size += sizeof(id->id);
 
-        ogs_assert(size + sizeof(id->len) <= data_len);
+        if (size + (int)sizeof(id->len) > data_len) {
+            ogs_error("PCO/EPCO truncated before Container-Length "
+                    "[id:0x%x offset:%d len:%d]",
+                    id->id, size, data_len);
+            return -EINVAL;
+        }
         memcpy(&id->len, data + size, sizeof(id->len));
         size += sizeof(id->len);
+
+        if (size + id->len > data_len) {
+            ogs_error("PCO/EPCO truncated Container data "
+                    "[id:0x%x container-len:%u offset:%d len:%d]",
+                    id->id, id->len, size, data_len);
+            return -EINVAL;
+        }
 
         id->data = data + size;
         size += id->len;
 
         i++;
     }
+
+    if (size < data_len) {
+        ogs_error("PCO/EPCO exceeds maximum number of containers "
+                "[%d]", OGS_MAX_NUM_OF_PROTOCOL_OR_CONTAINER_ID);
+        return -EINVAL;
+    }
+
     pco->num_of_id = i;
     ogs_expect(size == data_len);
 

@@ -176,7 +176,7 @@ int ngap_send_to_nas(ran_ue_t *ran_ue,
 
     amf_ue = amf_ue_find_by_id(ran_ue->amf_ue_id);
 
-    /* The Packet Buffer(pkbuf_t) for NAS message MUST make a HEADROOM. 
+    /* The Packet Buffer(pkbuf_t) for NAS message MUST make a HEADROOM.
      * When calculating AES_CMAC, we need to use the headroom of the packet. */
     nasbuf = ogs_pkbuf_alloc(NULL, OGS_NAS_HEADROOM+nasPdu->size);
     ogs_assert(nasbuf);
@@ -314,6 +314,39 @@ int ngap_send_ng_setup_response(amf_gnb_t *gnb)
     ogs_expect(rv == OGS_OK);
 
     return rv;
+}
+
+int ngap_send_amf_configuration_update(amf_gnb_t *gnb)
+{
+    int rv;
+    ogs_pkbuf_t *ngap_buffer;
+
+    ogs_assert(gnb);
+
+    ogs_debug("AMF-Configuration update");
+
+    ngap_buffer = ngap_build_amf_configuration_update();
+    ogs_assert(ngap_buffer);
+
+    rv = ngap_send_to_gnb(gnb, ngap_buffer, NGAP_NON_UE_SIGNALLING);
+    ogs_expect(rv == OGS_OK);
+
+    return rv;
+}
+
+void ngap_send_amf_configuration_update_all(void)
+{
+    amf_gnb_t *gnb = NULL;
+    int count = 0;
+
+    ogs_list_for_each(&amf_self()->gnb_list, gnb) {
+        if (gnb->state.ng_setup_success == true) {
+            ngap_send_amf_configuration_update(gnb);
+            count++;
+        }
+    }
+
+    ogs_info("AMFConfigurationUpdate sent to %d connected gNB(s)", count);
 }
 
 int ngap_send_ng_setup_failure(

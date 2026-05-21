@@ -21,6 +21,11 @@
 #include "ngap-path.h"
 #include "metrics.h"
 
+#include "ogs-metrics.h"
+#include "metrics/prometheus/json_pager.h"
+#include "gnb-info.h"
+#include "ue-info.h"
+
 static ogs_thread_t *thread;
 static void amf_main(void *data);
 static int initialized = 0;
@@ -55,6 +60,10 @@ int amf_initialize(void)
     if (rv != OGS_OK) return rv;
 
     ogs_metrics_context_open(ogs_metrics_self());
+
+    /* dumpers /gnb-info /ue-info */
+    ogs_metrics_register_custom_ep(amf_dump_gnb_info, "/gnb-info");
+    ogs_metrics_register_custom_ep(amf_dump_ue_info, "/ue-info");
 
     rv = amf_sbi_open();
     if (rv != OGS_OK) return rv;

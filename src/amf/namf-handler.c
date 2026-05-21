@@ -287,7 +287,7 @@ int amf_namf_comm_handle_n1_n2_message_transfer(
                 header.resource.component[1] = amf_ue->supi;
                 header.resource.component[2] =
                     (char *)OGS_SBI_RESOURCE_NAME_N1_N2_MESSAGES;
-                header.resource.component[3] = sess->sm_context.ref;
+                header.resource.component[3] = sess->sm_context_ref;
 
                 sendmsg.http.location = ogs_sbi_server_uri(server, &header);
 
@@ -349,7 +349,7 @@ int amf_namf_comm_handle_n1_n2_message_transfer(
             header.resource.component[1] = amf_ue->supi;
             header.resource.component[2] =
                 (char *)OGS_SBI_RESOURCE_NAME_N1_N2_MESSAGES;
-            header.resource.component[3] = sess->sm_context.ref;
+            header.resource.component[3] = sess->sm_context_ref;
 
             sendmsg.http.location = ogs_sbi_server_uri(server, &header);
 
@@ -423,7 +423,7 @@ int amf_namf_comm_handle_n1_n2_message_transfer(
                 header.resource.component[1] = amf_ue->supi;
                 header.resource.component[2] =
                     (char *)OGS_SBI_RESOURCE_NAME_N1_N2_MESSAGES;
-                header.resource.component[3] = sess->sm_context.ref;
+                header.resource.component[3] = sess->sm_context_ref;
 
                 sendmsg.http.location = ogs_sbi_server_uri(server, &header);
 
@@ -595,6 +595,7 @@ int amf_namf_callback_handle_sm_context_status(
         sess->n2_released == true &&
         sess->resource_status == OpenAPI_resource_status_RELEASED) {
         amf_nsmf_pdusession_handle_release_sm_context(
+                amf_ue, ran_ue_find_by_id(sess->ran_ue_id),
                 sess, AMF_RELEASE_SM_CONTEXT_NO_STATE);
     }
 
@@ -1485,9 +1486,9 @@ static OpenAPI_list_t *amf_namf_comm_encode_ue_session_context_list(
         ogs_assert(sNSSAI);
 
         PduSessionContext->pdu_session_id = sess->psi;
-        ogs_assert(sess->sm_context.resource_uri);
+        ogs_assert(sess->sm_context_resource_uri);
         PduSessionContext->sm_context_ref =
-            ogs_strdup(sess->sm_context.resource_uri);
+            ogs_strdup(sess->sm_context_resource_uri);
 
         sNSSAI->sst = sess->s_nssai.sst;
         sNSSAI->sd = ogs_s_nssai_sd_to_string(sess->s_nssai.sd);
@@ -1812,9 +1813,9 @@ static void amf_namf_comm_decode_ue_session_context_list(
         ogs_freeaddrinfo(addr);
         ogs_freeaddrinfo(addr6);
 
-        sess->sm_context.resource_uri =
+        sess->sm_context_resource_uri =
             ogs_strdup(PduSessionContext->sm_context_ref);
-        sess->sm_context.ref =
+        sess->sm_context_ref =
             ogs_strdup(message.h.resource.component[1]);
 
         memset(&sess->s_nssai, 0, sizeof(sess->s_nssai));
@@ -1895,7 +1896,15 @@ int amf_namf_comm_handle_registration_status_update_request(
                     uint8_t psi = *(double *)node->data;
                     sess = amf_sess_find_by_psi(amf_ue, psi);
                     if (SESSION_CONTEXT_IN_SMF(sess)) {
-                        amf_sbi_send_release_session(ran_ue, sess, AMF_RELEASE_SM_CONTEXT_NO_STATE);
+                        amf_nsmf_pdusession_sm_context_param_t param;
+
+                        memset(&param, 0, sizeof(param));
+                        param.ue_location = true;
+                        param.ue_timezone = true;
+
+                        amf_sbi_send_release_session(
+                                ran_ue, sess,
+                                AMF_RELEASE_SM_CONTEXT_NO_STATE, &param);
                     } else {
                         ogs_error("[%s] No Session Context PSI[%d]",
                                 amf_ue->supi, psi);

@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2019-2023 by Sukchan Lee <acetcom@gmail.com>
+ * Copyright (C) 2019-2026 by Sukchan Lee <acetcom@gmail.com>
  *
  * This file is part of Open5GS.
  *
@@ -37,15 +37,25 @@ int esm_handle_pdn_connectivity_request(
     mme_ue_t *mme_ue = NULL;
     mme_sess_t *sess = NULL;
     uint8_t security_protected_required = 0;
-
-    ogs_assert(bearer);
-    sess = mme_sess_find_by_id(bearer->sess_id);
-    ogs_assert(sess);
-    mme_ue = mme_ue_find_by_id(sess->mme_ue_id);
-    ogs_assert(mme_ue);
-    ogs_assert(enb_ue);
+    const char *emergency_dnn = mme_self()->emergency.dnn;
+    bool emergency;
 
     ogs_assert(req);
+
+    if (!bearer) {
+        ogs_error("No bearer context");
+        return OGS_NOTFOUND;
+    }
+    sess = mme_sess_find_by_id(bearer->sess_id);
+    if (!sess) {
+        ogs_warn("Session context has already been removed");
+        return OGS_NOTFOUND;
+    }
+    mme_ue = mme_ue_find_by_id(sess->mme_ue_id);
+    if (!mme_ue) {
+        ogs_warn("UE(mme-ue) context has already been removed");
+        return OGS_NOTFOUND;
+    }
 
     ogs_assert(MME_UE_HAVE_IMSI(mme_ue));
 
@@ -87,10 +97,27 @@ int esm_handle_pdn_connectivity_request(
                 security_protected_required);
     }
 
-    if (req->presencemask &
-            OGS_NAS_EPS_PDN_CONNECTIVITY_REQUEST_ACCESS_POINT_NAME_PRESENT) {
-        sess->session = mme_session_find_by_apn(
-                            mme_ue, req->access_point_name.apn);
+    emergency = (req->request_type.value == OGS_NAS_EPS_REQUEST_TYPE_EMERGENCY);
+    if (emergency && !emergency_dnn) {
+        /* Emergency call, but no emergency APN defined */
+        r = nas_eps_send_pdn_connectivity_reject(
+                sess, OGS_NAS_ESM_CAUSE_REQUEST_REJECTED_UNSPECIFIED, create_action);
+        ogs_expect(r == OGS_OK);
+        ogs_assert(r != OGS_ERROR);
+        ogs_warn("Emergency call, but no emergency APN defined");
+        return OGS_ERROR;
+    }
+    if ((req->presencemask &
+            OGS_NAS_EPS_PDN_CONNECTIVITY_REQUEST_ACCESS_POINT_NAME_PRESENT) ||
+        emergency) {
+        const char *apn;
+        if (emergency) {
+            apn = emergency_dnn;
+            sess->ue_request_type.value = 1;
+        } else {
+            apn = req->access_point_name.apn;
+        }
+        sess->session = mme_session_find_by_apn(mme_ue, apn);
         if (!sess->session) {
             /* Invalid APN */
             r = nas_eps_send_pdn_connectivity_reject(
@@ -98,7 +125,7 @@ int esm_handle_pdn_connectivity_request(
                     create_action);
             ogs_expect(r == OGS_OK);
             ogs_assert(r != OGS_ERROR);
-            ogs_warn("Invalid APN[%s]", req->access_point_name.apn);
+            ogs_warn("Invalid APN[%s]", apn);
             return OGS_ERROR;
         }
 
@@ -196,12 +223,17 @@ int esm_handle_information_response(
     int r;
     mme_ue_t *mme_ue = NULL;
 
-    ogs_assert(sess);
-    mme_ue = mme_ue_find_by_id(sess->mme_ue_id);
-    ogs_assert(mme_ue);
-    ogs_assert(enb_ue);
-
     ogs_assert(rsp);
+
+    if (!sess) {
+        ogs_warn("Session context has already been removed");
+        return OGS_NOTFOUND;
+    }
+    mme_ue = mme_ue_find_by_id(sess->mme_ue_id);
+    if (!mme_ue) {
+        ogs_warn("UE(mme-ue) context has already been removed");
+        return OGS_NOTFOUND;
+    }
 
     if (rsp->presencemask &
             OGS_NAS_EPS_ESM_INFORMATION_RESPONSE_ACCESS_POINT_NAME_PRESENT) {
@@ -294,12 +326,20 @@ int esm_handle_bearer_resource_allocation_request(
     mme_ue_t *mme_ue = NULL;
     mme_sess_t *sess = NULL;
 
-    ogs_assert(bearer);
+    if (!bearer) {
+        ogs_error("No bearer context");
+        return OGS_NOTFOUND;
+    }
     sess = mme_sess_find_by_id(bearer->sess_id);
-    ogs_assert(sess);
+    if (!sess) {
+        ogs_warn("Session context has already been removed");
+        return OGS_NOTFOUND;
+    }
     mme_ue = mme_ue_find_by_id(sess->mme_ue_id);
-    ogs_assert(mme_ue);
-    ogs_assert(enb_ue);
+    if (!mme_ue) {
+        ogs_warn("UE(mme-ue) context has already been removed");
+        return OGS_NOTFOUND;
+    }
 
     r = nas_eps_send_bearer_resource_allocation_reject(
             mme_ue, sess->pti, OGS_NAS_ESM_CAUSE_NETWORK_FAILURE);
@@ -314,10 +354,15 @@ int esm_handle_bearer_resource_modification_request(
 {
     mme_ue_t *mme_ue = NULL;
 
-    ogs_assert(bearer);
+    if (!bearer) {
+        ogs_error("No bearer context");
+        return OGS_NOTFOUND;
+    }
     mme_ue = mme_ue_find_by_id(bearer->mme_ue_id);
-    ogs_assert(mme_ue);
-    ogs_assert(enb_ue);
+    if (!mme_ue) {
+        ogs_warn("UE(mme-ue) context has already been removed");
+        return OGS_NOTFOUND;
+    }
 
     ogs_assert(OGS_OK ==
         mme_gtp_send_bearer_resource_command(bearer, message));

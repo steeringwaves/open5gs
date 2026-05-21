@@ -497,6 +497,13 @@ int ogs_sbi_discover_and_send(ogs_sbi_xact_t *xact)
                 ogs_free(v);
             }
 
+            if (discovery_option && discovery_option->hnrf_uri) {
+                ogs_debug("hnrf_uri [%s]", discovery_option->hnrf_uri);
+                ogs_sbi_header_set(request->http.headers,
+                        OGS_SBI_CUSTOM_DISCOVERY_HNRF_URI,
+                        discovery_option->hnrf_uri);
+            }
+
             rc = ogs_sbi_client_send_via_scp_or_sepp(
                     scp_client, client_discover_cb, request,
                     OGS_UINT_TO_POINTER(xact->id));
@@ -510,9 +517,7 @@ int ogs_sbi_discover_and_send(ogs_sbi_xact_t *xact)
          ***********************/
 
         /* If `client` instance is available, use direct communication */
-        rc = ogs_sbi_send_request_to_client(
-                client, ogs_sbi_client_handler, request,
-                OGS_UINT_TO_POINTER(xact->id));
+        rc = ogs_sbi_send_request_with_sepp_discovery(client, xact);
         ogs_expect(rc == true);
         return (rc == true) ? OGS_OK : OGS_ERROR;
 
@@ -590,15 +595,10 @@ int ogs_sbi_discover_only(ogs_sbi_xact_t *xact)
 bool ogs_sbi_send_request_to_nf_instance(
         ogs_sbi_nf_instance_t *nf_instance, ogs_sbi_xact_t *xact)
 {
-    bool rc;
     ogs_sbi_request_t *request = NULL;
     ogs_sbi_client_t *client = NULL;
 
-    ogs_sbi_object_t *sbi_object = NULL;
-
     ogs_assert(xact);
-    sbi_object = xact->sbi_object;
-    ogs_assert(sbi_object);
     request = xact->request;
     ogs_assert(request);
 
@@ -660,6 +660,26 @@ bool ogs_sbi_send_request_to_nf_instance(
 #endif
     }
 
+    if (ogs_sbi_send_request_with_sepp_discovery(client, xact) == false) {
+        ogs_sbi_xact_remove(xact);
+        return false;
+    }
+
+    return true;
+}
+
+bool ogs_sbi_send_request_with_sepp_discovery(
+        ogs_sbi_client_t *client, ogs_sbi_xact_t *xact)
+{
+    bool rc;
+    ogs_sbi_request_t *request = NULL;
+
+    ogs_assert(xact);
+    request = xact->request;
+    ogs_assert(request);
+
+    ogs_assert(client);
+
     if (client->fqdn && ogs_sbi_fqdn_in_vplmn(client->fqdn) == true) {
         ogs_sbi_client_t *sepp_client = NULL, *nrf_client = NULL;
 
@@ -672,7 +692,6 @@ bool ogs_sbi_send_request_to_nf_instance(
             ogs_error("No SEPP(%p) and NRF(%p) [%s]",
                     sepp_client, nrf_client, client->fqdn);
 
-            ogs_sbi_xact_remove(xact);
             return false;
 
         } else if (!sepp_client) {
@@ -682,7 +701,6 @@ bool ogs_sbi_send_request_to_nf_instance(
             xact->target_apiroot = ogs_sbi_client_apiroot(client);
             if (!xact->target_apiroot) {
                 ogs_error("ogs_strdup(xact->target_apiroot) failed");
-                ogs_sbi_xact_remove(xact);
                 return false;
             }
 
@@ -690,7 +708,6 @@ bool ogs_sbi_send_request_to_nf_instance(
                         OpenAPI_nf_type_SEPP, xact->requester_nf_type, NULL);
             if (!nrf_request) {
                 ogs_error("ogs_nnrf_disc_build_discover() failed");
-                ogs_sbi_xact_remove(xact);
                 return false;
             }
 
@@ -699,7 +716,6 @@ bool ogs_sbi_send_request_to_nf_instance(
                     OGS_UINT_TO_POINTER(xact->id));
             if (rc == false) {
                 ogs_error("ogs_sbi_client_send_request() failed");
-                ogs_sbi_xact_remove(xact);
             }
 
             ogs_sbi_request_free(nrf_request);
@@ -713,7 +729,6 @@ bool ogs_sbi_send_request_to_nf_instance(
             OGS_UINT_TO_POINTER(xact->id));
     if (rc == false) {
         ogs_error("ogs_sbi_send_request_to_client() failed");
-        ogs_sbi_xact_remove(xact);
     }
 
     return rc;
