@@ -2146,6 +2146,7 @@ void s1ap_handle_ue_context_release_action(enb_ue_t *enb_ue)
     mme_ue = mme_ue_find_by_id(enb_ue->mme_ue_id);
     if (mme_ue) {
         ogs_info("    IMSI[%s]", mme_ue->imsi_bcd);
+        diagnostic_broadcast("{\"Command\":\"UE Release\",\"IMSI\":\"%s\",\"IMEI\":\"%s\"}", mme_ue->imsi_bcd, mme_ue->imeisv_bcd ? mme_ue->imeisv_bcd : "");
 
         /*
          * An assert occurs when a NAS message retransmission occurs.
