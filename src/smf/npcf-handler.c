@@ -595,7 +595,7 @@ bool smf_npcf_smpolicycontrol_handle_create(
         smf_ue->supi, sess->session.name,
         sess->ipv4 ? OGS_INET_NTOP(&sess->ipv4->addr, buf1) : "",
         sess->ipv6 ? OGS_INET6_NTOP(&sess->ipv6->addr, buf2) : "");
-        
+
     /* Set UPF N3 DL Outer-Header-Creation */
     if (sess->remote_dl_ip.ipv4 || sess->remote_dl_ip.ipv6) {
         ogs_assert(OGS_OK ==
