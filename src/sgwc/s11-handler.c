@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2019-2023 by Sukchan Lee <acetcom@gmail.com>
+ * Copyright (C) 2019-2026 by Sukchan Lee <acetcom@gmail.com>
  *
  * This file is part of Open5GS.
  *
@@ -293,6 +293,8 @@ void sgwc_s11_handle_create_session_request(
     /* Check if selected SGW-U is associated with SGW-C */
     ogs_assert(sess->pfcp_node);
     if (!OGS_FSM_CHECK(&sess->pfcp_node->sm, sgwc_pfcp_state_associated)) {
+        ogs_error("[%s:%s] Remote peer not responding",
+                  sgwc_ue->imsi_bcd, sess->session.name);
         cause_value = OGS_GTP2_CAUSE_REMOTE_PEER_NOT_RESPONDING;
         goto cleanup;
     }
@@ -316,8 +318,12 @@ void sgwc_s11_handle_create_session_request(
 
         decoded = ogs_gtp2_parse_bearer_qos(&bearer_qos,
                 &req->bearer_contexts_to_be_created[i].bearer_level_qos);
-        ogs_assert(decoded ==
-                req->bearer_contexts_to_be_created[i].bearer_level_qos.len);
+        if (GTP2_BEARER_QOS_LEN != decoded) {
+            ogs_error("Invalid Bearer QoS IE in Create Session Request "
+                    "(decoded=%d, expected=%d)", decoded, GTP2_BEARER_QOS_LEN);
+            cause_value = OGS_GTP2_CAUSE_MANDATORY_IE_INCORRECT;
+            goto cleanup;
+        }
 
         bearer = sgwc_bearer_add(sess);
         ogs_assert(bearer);
@@ -811,7 +817,6 @@ void sgwc_s11_handle_create_bearer_response(
     ogs_gtp2_f_teid_t *sgw_s1u_teid = NULL, *enb_s1u_teid = NULL;
     ogs_gtp2_uli_t uli;
 
-    ogs_assert(sgwc_ue);
     ogs_assert(message);
     rsp = &message->create_bearer_response;
     ogs_assert(rsp);
@@ -850,6 +855,12 @@ void sgwc_s11_handle_create_bearer_response(
         sess = sgwc_sess_find_by_id(bearer->sess_id);
         if (!sess)
             ogs_error("No Session ID [%d]", bearer->sess_id);
+    }
+
+    if (sess) {
+        sgwc_ue = sgwc_ue_find_by_id(sess->sgwc_ue_id);
+        if (!sgwc_ue)
+            ogs_error("No SGWC-UE ID [%d]", sess->sgwc_ue_id);
     }
 
     rv = ogs_gtp_xact_commit(s11_xact);
@@ -892,6 +903,10 @@ void sgwc_s11_handle_create_bearer_response(
     }
     if (!sess) {
         ogs_error("No Session Context");
+        cause_value = OGS_GTP2_CAUSE_CONTEXT_NOT_FOUND;
+    }
+    if (!sgwc_ue) {
+        ogs_error("No SGWC-UE Context");
         cause_value = OGS_GTP2_CAUSE_CONTEXT_NOT_FOUND;
     }
 
@@ -1039,7 +1054,6 @@ void sgwc_s11_handle_update_bearer_response(
     ogs_pool_id_t bearer_id = OGS_INVALID_POOL_ID;
     ogs_gtp2_update_bearer_response_t *rsp = NULL;
 
-    ogs_assert(sgwc_ue);
     ogs_assert(message);
     rsp = &message->update_bearer_response;
     ogs_assert(rsp);
@@ -1061,7 +1075,8 @@ void sgwc_s11_handle_update_bearer_response(
                 bearer_id <= OGS_MAX_POOL_ID);
 
         bearer = sgwc_bearer_find_by_id(bearer_id);
-        ogs_assert(bearer);
+        if (!bearer)
+            ogs_error("No Bearer ID [%d]", bearer_id);
     } else {
         ogs_assert(s11_xact->data);
         bearer_id = OGS_POINTER_TO_UINT(s11_xact->data);
@@ -1069,11 +1084,21 @@ void sgwc_s11_handle_update_bearer_response(
                 bearer_id <= OGS_MAX_POOL_ID);
 
         bearer = sgwc_bearer_find_by_id(bearer_id);
-        ogs_assert(bearer);
+        if (!bearer)
+            ogs_error("No Bearer ID [%d]", bearer_id);
     }
 
-    sess = sgwc_sess_find_by_id(bearer->sess_id);
-    ogs_assert(sess);
+    if (bearer) {
+        sess = sgwc_sess_find_by_id(bearer->sess_id);
+        if (!sess)
+            ogs_error("No Session ID [%d]", bearer->sess_id);
+    }
+
+    if (sess) {
+        sgwc_ue = sgwc_ue_find_by_id(sess->sgwc_ue_id);
+        if (!sgwc_ue)
+            ogs_error("No SGWC-UE ID [%d]", sess->sgwc_ue_id);
+    }
 
     rv = ogs_gtp_xact_commit(s11_xact);
     ogs_expect(rv == OGS_OK);
@@ -1099,6 +1124,19 @@ void sgwc_s11_handle_update_bearer_response(
     if (rsp->bearer_contexts.cause.presence == 0) {
         ogs_error("No Bearer Cause");
         cause_value = OGS_GTP2_CAUSE_MANDATORY_IE_MISSING;
+    }
+
+    if (!bearer) {
+        ogs_error("No Bearer Context");
+        cause_value = OGS_GTP2_CAUSE_CONTEXT_NOT_FOUND;
+    }
+    if (!sess) {
+        ogs_error("No Session Context");
+        cause_value = OGS_GTP2_CAUSE_CONTEXT_NOT_FOUND;
+    }
+    if (!sgwc_ue) {
+        ogs_error("No SGWC-UE Context");
+        cause_value = OGS_GTP2_CAUSE_CONTEXT_NOT_FOUND;
     }
 
     if (cause_value != OGS_GTP2_CAUSE_REQUEST_ACCEPTED)
@@ -1176,7 +1214,6 @@ void sgwc_s11_handle_delete_bearer_response(
     ogs_pool_id_t bearer_id = OGS_INVALID_POOL_ID;
     ogs_gtp2_delete_bearer_response_t *rsp = NULL;
 
-    ogs_assert(sgwc_ue);
     ogs_assert(message);
     rsp = &message->delete_bearer_response;
     ogs_assert(rsp);
@@ -1197,37 +1234,55 @@ void sgwc_s11_handle_delete_bearer_response(
         ogs_assert(bearer_id >= OGS_MIN_POOL_ID &&
                 bearer_id <= OGS_MAX_POOL_ID);
 
-        rv = ogs_gtp_xact_commit(s11_xact);
-        ogs_expect(rv == OGS_OK);
-
         bearer = sgwc_bearer_find_by_id(bearer_id);
-        if (!bearer) {
-            ogs_error("No Bearer Context [%d]", bearer_id);
-            return;
-        }
+        if (!bearer)
+            ogs_error("No Bearer ID [%d]", bearer_id);
     } else {
         ogs_assert(s11_xact->data);
         bearer_id = OGS_POINTER_TO_UINT(s11_xact->data);
         ogs_assert(bearer_id >= OGS_MIN_POOL_ID &&
                 bearer_id <= OGS_MAX_POOL_ID);
 
-        rv = ogs_gtp_xact_commit(s11_xact);
-        ogs_expect(rv == OGS_OK);
-
         bearer = sgwc_bearer_find_by_id(bearer_id);
-        if (!bearer) {
-            ogs_error("No Bearer Context [ID:%d]", bearer_id);
-            return;
-        }
+        if (!bearer)
+            ogs_error("No Bearer ID [%d]", bearer_id);
     }
 
-    sess = sgwc_sess_find_by_id(bearer->sess_id);
-    ogs_assert(sess);
+    if (bearer) {
+        sess = sgwc_sess_find_by_id(bearer->sess_id);
+        if (!sess)
+            ogs_error("No Session ID [%d]", bearer->sess_id);
+    }
+
+    if (sess) {
+        sgwc_ue = sgwc_ue_find_by_id(sess->sgwc_ue_id);
+        if (!sgwc_ue)
+            ogs_error("No SGWC-UE ID [%d]", sess->sgwc_ue_id);
+    }
+
+    rv = ogs_gtp_xact_commit(s11_xact);
+    ogs_expect(rv == OGS_OK);
 
     /************************
      * Check SGWC-UE Context
      ************************/
     cause_value = OGS_GTP2_CAUSE_REQUEST_ACCEPTED;
+
+    if (!bearer) {
+        ogs_error("No Bearer Context");
+        cause_value = OGS_GTP2_CAUSE_CONTEXT_NOT_FOUND;
+    }
+    if (!sess) {
+        ogs_error("No Session Context");
+        cause_value = OGS_GTP2_CAUSE_CONTEXT_NOT_FOUND;
+    }
+    if (!sgwc_ue) {
+        ogs_error("No SGWC-UE Context");
+        cause_value = OGS_GTP2_CAUSE_CONTEXT_NOT_FOUND;
+    }
+
+    if (cause_value != OGS_GTP2_CAUSE_REQUEST_ACCEPTED)
+        goto cleanup;
 
     if (rsp->linked_eps_bearer_id.presence) {
        /*
@@ -1311,6 +1366,14 @@ void sgwc_s11_handle_delete_bearer_response(
             sgwc_pfcp_send_bearer_modification_request(
                 bearer, s5c_xact->id, gtpbuf, OGS_PFCP_MODIFY_REMOVE));
     }
+
+    return;
+
+cleanup:
+    ogs_assert(cause_value != OGS_GTP2_CAUSE_REQUEST_ACCEPTED);
+
+    ogs_gtp_send_error_message(s5c_xact, sess ? sess->pgw_s5c_teid : 0,
+            OGS_GTP2_DELETE_BEARER_RESPONSE_TYPE, cause_value);
 }
 
 void sgwc_s11_handle_release_access_bearers_request(
@@ -1386,16 +1449,34 @@ void sgwc_s11_handle_downlink_data_notification_ack(
      * Check Transaction
      ********************/
     ogs_assert(s11_xact);
-    ogs_assert(s11_xact->data);
+
+    if (!s11_xact->data) {
+        ogs_error("No Transaction Data in Downlink Data Notification Ack");
+        goto out;
+    }
+
     bearer_id = OGS_POINTER_TO_UINT(s11_xact->data);
-    ogs_assert(bearer_id >= OGS_MIN_POOL_ID &&
-            bearer_id <= OGS_MAX_POOL_ID);
+    if (bearer_id < OGS_MIN_POOL_ID || bearer_id > OGS_MAX_POOL_ID) {
+        ogs_error("Invalid Bearer ID [%d] in Downlink Data Notification Ack",
+                bearer_id);
+        goto out;
+    }
 
     bearer = sgwc_bearer_find_by_id(bearer_id);
-    ogs_assert(bearer);
-    sess = sgwc_sess_find_by_id(bearer->sess_id);
-    ogs_assert(sess);
+    if (!bearer) {
+        ogs_warn("Bearer Not Found [id:%d] in Downlink Data Notification Ack",
+                bearer_id);
+        goto out;
+    }
 
+    sess = sgwc_sess_find_by_id(bearer->sess_id);
+    if (!sess) {
+        ogs_warn("Session Not Found [id:%d] in Downlink Data Notification Ack",
+                bearer->sess_id);
+        goto out;
+    }
+
+out:
     rv = ogs_gtp_xact_commit(s11_xact);
     ogs_expect(rv == OGS_OK);
 
@@ -1415,11 +1496,18 @@ void sgwc_s11_handle_downlink_data_notification_ack(
         ogs_error("No Cause");
     }
 
-    ogs_info("Downlink Data Notification Acknowledge [%d]", bearer->id);
-    if (sgwc_ue) {
+    ogs_info("Downlink Data Notification Acknowledge%s%s",
+            s11_xact->data ? " bearer_id present" : "",
+            sgwc_ue ? " ue present" : "");
+
+    if (sgwc_ue)
         ogs_info("    MME_S11_TEID[%d] SGW_S11_TEID[%d]",
             sgwc_ue->mme_s11_teid, sgwc_ue->sgw_s11_teid);
-    }
+    if (sess)
+        ogs_info("    SGW_S5C_TEID[%d] PGW_S5C_TEID[%d]",
+            sess->sgw_s5c_teid, sess->pgw_s5c_teid);
+    if (bearer)
+        ogs_info("    BEARER ID[%d] EBI[%d]", bearer->id, bearer->ebi);
 }
 
 void sgwc_s11_handle_create_indirect_data_forwarding_tunnel_request(
@@ -1583,13 +1671,42 @@ void sgwc_s11_handle_create_indirect_data_forwarding_tunnel_request(
     }
 
     ogs_list_for_each(&sgwc_ue->sess_list, sess) {
+        bool has_indirect = false;
 
         ogs_assert(ogs_list_count(&sess->bearer_list));
-        ogs_info("    sess_id=%d xact=%p", sess->id, s11_xact);
-        ogs_assert(OGS_OK ==
-            sgwc_pfcp_send_session_modification_request(
-                sess, s11_xact->id, gtpbuf,
-                OGS_PFCP_MODIFY_INDIRECT|OGS_PFCP_MODIFY_CREATE));
+        ogs_list_for_each(&sess->bearer_list, bearer) {
+            ogs_list_for_each(&bearer->tunnel_list, tunnel) {
+                if ((tunnel->interface_type ==
+                         OGS_GTP2_F_TEID_SGW_GTP_U_FOR_DL_DATA_FORWARDING) ||
+                    (tunnel->interface_type ==
+                         OGS_GTP2_F_TEID_SGW_GTP_U_FOR_UL_DATA_FORWARDING)) {
+                    has_indirect = true;
+                    break;
+                }
+            }
+            if (has_indirect) break;
+        }
+
+        if (has_indirect == true) {
+            ogs_info("    sess_id=%d xact=%p", sess->id, s11_xact);
+            ogs_assert(OGS_OK ==
+                sgwc_pfcp_send_session_modification_request(
+                    sess, s11_xact->id, gtpbuf,
+                    OGS_PFCP_MODIFY_INDIRECT|OGS_PFCP_MODIFY_CREATE));
+        } else {
+            ogs_error("No Indirect Tunnel");
+            ogs_error("    UE IMSI[%s] APN[%s]",
+                    sgwc_ue->imsi_bcd, sess->session.name);
+            ogs_error("    MME_S11_TEID[%d] SGW_S11_TEID[%d]",
+                    sgwc_ue->mme_s11_teid, sgwc_ue->sgw_s11_teid);
+            ogs_list_for_each(&sess->bearer_list, bearer) {
+                ogs_error("    EBI[%d]", bearer->ebi);
+                ogs_list_for_each(&bearer->tunnel_list, tunnel) {
+                    ogs_error("TUNNEL[%d] INF[%d]",
+                            tunnel->id, tunnel->interface_type);
+                }
+            }
+        }
     }
 
     return;

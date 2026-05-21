@@ -280,15 +280,17 @@ void nssf_state_operational(ogs_fsm_t *s, nssf_event_t *e)
                     break;
 
                 CASE(OGS_SBI_HTTP_METHOD_DELETE)
-                    if (message.res_status ==
-                            OGS_SBI_HTTP_STATUS_NO_CONTENT) {
-                        ogs_sbi_subscription_data_remove(subscription_data);
-                    } else {
+                    if (message.res_status == OGS_SBI_HTTP_STATUS_NO_CONTENT)
+                        ogs_info("[%s] Subscription deleted",
+                                subscription_data->id ?
+                                    subscription_data->id : "Unknown");
+                    else
                         ogs_error("[%s] HTTP response error [%d]",
                                 subscription_data->id ?
                                     subscription_data->id : "Unknown",
                                 message.res_status);
-                    }
+
+                    ogs_sbi_subscription_data_remove(subscription_data);
                     break;
 
                 DEFAULT
@@ -367,13 +369,19 @@ void nssf_state_operational(ogs_fsm_t *s, nssf_event_t *e)
 
             ogs_sbi_xact_remove(sbi_xact);
 
+            if (!stream) {
+                ogs_warn("Original NSSelection stream has been removed "
+                        "before Home-NSSF response arrived");
+                break;
+            }
+
             home = nssf_home_find_by_id(sbi_object_id);
             if (!home) {
                 ogs_error("Home Network Context has already been removed");
                 break;
             }
 
-            e->h.sbi.message = &message;;
+            e->h.sbi.message = &message;
 
             nssf_nnrf_nsselection_handle_get_from_hnssf(home, stream, &message);
             break;

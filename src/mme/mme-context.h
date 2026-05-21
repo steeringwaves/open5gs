@@ -163,7 +163,7 @@ typedef struct mme_context_s {
     struct {
         struct {
             ogs_time_t value;       /* Timer Value(Seconds) */
-        } t3402, t3412, t3423;
+        } t3402, t3396, t3412, t3423;
     } time;
 
     struct {
@@ -540,14 +540,34 @@ struct mme_ue_s {
     int             security_context_available;
     int             mac_failed;
 
+    /* Authentication synch failure counter */
+    uint8_t auth_synch_fail_count;
+
     /* flag: 1 = allow restoration of context, 0 = disallow */
     bool            can_restore_context;
+
+    /*
+     * ue_context_will_remove:
+     *
+     * Set when the UE context must be removed locally after the current
+     * EMM event completes, but we must not free the UE context inside
+     * the ongoing procedure.
+     *
+     * This flag is used to defer UE context removal to a dedicated EMM
+     * state (emm_state_ue_context_will_remove) to avoid use-after-free
+     * and double-free scenarios in implicit detach paths.
+     */
+    bool            ue_context_will_remove;
 
     /* Memento of context fields */
     mme_ue_memento_t memento;
 
     /* Security Context */
     ogs_nas_ue_network_capability_t ue_network_capability;
+
+    /* Transient Path Switch state */
+    bool send_ue_security_capability_in_path_switch_ack;
+
     ogs_nas_ms_network_capability_t ms_network_capability;
     ogs_nas_ue_additional_security_capability_t
         ue_additional_security_capability;
@@ -618,15 +638,17 @@ struct mme_ue_s {
     /* ESM Info */
     ogs_list_t      sess_list;
 
+#define INVALID_EPS_BEARER_ID       0
 #define MIN_EPS_BEARER_ID           5
 #define MAX_EPS_BEARER_ID           15
 
 #define CLEAR_EPS_BEARER_ID(__mME) \
     do { \
         ogs_assert((__mME)); \
-        mme_ebi_pool_clear(__mME); \
+        (__mME)->ebi_bitmap = 0; \
     } while(0)
-    OGS_POOL(ebi_pool, uint8_t);
+
+    uint16_t ebi_bitmap; /* bit5~bit15 used */
 
     /* Paging Info */
 #define ECM_CONNECTED(__mME) \
@@ -957,7 +979,6 @@ typedef struct mme_bearer_s {
 
     ogs_fsm_t       sm;             /* State Machine */
 
-    uint8_t         *ebi_node;      /* Pool-Node for EPS Bearer ID */
     uint8_t         ebi;            /* EPS Bearer ID */
 
     uint32_t        enb_s1u_teid;
@@ -1235,9 +1256,9 @@ int mme_find_served_tai(ogs_eps_tai_t *tai);
 mme_m_tmsi_t *mme_m_tmsi_alloc(void);
 int mme_m_tmsi_free(mme_m_tmsi_t *tmsi);
 
-void mme_ebi_pool_init(mme_ue_t *mme_ue);
-void mme_ebi_pool_final(mme_ue_t *mme_ue);
-void mme_ebi_pool_clear(mme_ue_t *mme_ue);
+uint8_t mme_ebi_alloc(mme_ue_t *mme_ue);
+int mme_ebi_free(mme_ue_t *mme_ue, int ebi);
+int mme_ebi_reserve(mme_ue_t *mme_ue, int ebi);
 
 uint8_t mme_selected_int_algorithm(mme_ue_t *mme_ue);
 uint8_t mme_selected_enc_algorithm(mme_ue_t *mme_ue);

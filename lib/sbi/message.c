@@ -1001,20 +1001,31 @@ int ogs_sbi_parse_request(
      */
             char *v = ogs_hash_this_val(hi);
             if (v) {
-                ogs_sbi_discovery_option_parse_service_names(
-                        discovery_option, v);
+                if (ogs_sbi_discovery_option_parse_service_names(
+                            discovery_option, v) != OGS_OK) {
+                    ogs_sbi_discovery_option_free(discovery_option);
+                    return OGS_ERROR;
+                }
                 discovery_option_presence = true;
             }
         } else if (!strcmp(ogs_hash_this_key(hi), OGS_SBI_PARAM_SNSSAIS)) {
             char *v = ogs_hash_this_val(hi);
             if (v) {
-                ogs_sbi_discovery_option_parse_snssais(discovery_option, v);
+                if (ogs_sbi_discovery_option_parse_snssais(
+                            discovery_option, v) != OGS_OK) {
+                    ogs_sbi_discovery_option_free(discovery_option);
+                    return OGS_ERROR;
+                }
                 discovery_option_presence = true;
             }
         } else if (!strcmp(ogs_hash_this_key(hi), OGS_SBI_PARAM_GUAMI)) {
             char *v = ogs_hash_this_val(hi);
             if (v) {
-                ogs_sbi_discovery_option_parse_guami(discovery_option, v);
+                if (ogs_sbi_discovery_option_parse_guami(
+                            discovery_option, v) != OGS_OK) {
+                    ogs_sbi_discovery_option_free(discovery_option);
+                    return OGS_ERROR;
+                }
                 discovery_option_presence = true;
             }
         } else if (!strcmp(ogs_hash_this_key(hi), OGS_SBI_PARAM_DNN)) {
@@ -1026,25 +1037,37 @@ int ogs_sbi_parse_request(
         } else if (!strcmp(ogs_hash_this_key(hi), OGS_SBI_PARAM_TAI)) {
             char *v = ogs_hash_this_val(hi);
             if (v) {
-                ogs_sbi_discovery_option_parse_tai(discovery_option, v);
+                if (ogs_sbi_discovery_option_parse_tai(
+                            discovery_option, v) != OGS_OK) {
+                    ogs_sbi_discovery_option_free(discovery_option);
+                    return OGS_ERROR;
+                }
                 discovery_option_presence = true;
             }
         } else if (!strcmp(ogs_hash_this_key(hi),
                     OGS_SBI_PARAM_TARGET_PLMN_LIST)) {
             char *v = ogs_hash_this_val(hi);
             if (v) {
-                discovery_option->num_of_target_plmn_list =
-                    ogs_sbi_discovery_option_parse_plmn_list(
+                int n = ogs_sbi_discovery_option_parse_plmn_list(
                         discovery_option->target_plmn_list, v);
+                if (n < 0) {
+                    ogs_sbi_discovery_option_free(discovery_option);
+                    return OGS_ERROR;
+                }
+                discovery_option->num_of_target_plmn_list = n;
                 discovery_option_presence = true;
             }
         } else if (!strcmp(ogs_hash_this_key(hi),
                     OGS_SBI_PARAM_REQUESTER_PLMN_LIST)) {
             char *v = ogs_hash_this_val(hi);
             if (v) {
-                discovery_option->num_of_requester_plmn_list =
-                    ogs_sbi_discovery_option_parse_plmn_list(
+                int n = ogs_sbi_discovery_option_parse_plmn_list(
                         discovery_option->requester_plmn_list, v);
+                if (n < 0) {
+                    ogs_sbi_discovery_option_free(discovery_option);
+                    return OGS_ERROR;
+                }
+                discovery_option->num_of_requester_plmn_list = n;
                 discovery_option_presence = true;
             }
         } else if (!strcmp(ogs_hash_this_key(hi), OGS_SBI_PARAM_HNRF_URI)) {
@@ -1059,6 +1082,11 @@ int ogs_sbi_parse_request(
             if (v) {
                 discovery_option->requester_features =
                     ogs_uint64_from_string_hexadecimal(v);
+                if (ogs_errno == EINVAL || ogs_errno == ERANGE) {
+                    ogs_error("ogs_uint64_from_string_hexadecimal() failed");
+                    ogs_sbi_discovery_option_free(discovery_option);
+                    return OGS_ERROR;
+                }
                 discovery_option_presence = true;
             }
         }
@@ -1281,7 +1309,6 @@ int ogs_sbi_parse_request(
 
     if (parse_content(message, &request->http) != OGS_OK) {
         ogs_error("parse_content() failed");
-        ogs_sbi_message_free(message);
         return OGS_ERROR;
     }
 
@@ -3120,17 +3147,40 @@ static bool build_content(
     return true;
 }
 
+typedef struct multipart_part_data_s {
+    char *content_type;
+    char *content_id;
+    char *content;
+    size_t content_length;
+} multipart_part_data_t;
+
 typedef struct multipart_parser_data_s {
     int num_of_part;
-    struct {
-        char *content_type;
-        char *content_id;
-        char *content;
-        size_t content_length;
-    } part[OGS_SBI_MAX_NUM_OF_PART];
+    multipart_part_data_t part[OGS_SBI_MAX_NUM_OF_PART];
+
+    bool parse_error;
 
     char *header_field;
 } multipart_parser_data_t;
+
+static void multipart_parser_data_free(multipart_parser_data_t *data)
+{
+    int i;
+
+    ogs_assert(data);
+
+    for (i = 0; i < OGS_SBI_MAX_NUM_OF_PART; i++) {
+        if (data->part[i].content_type)
+            ogs_free(data->part[i].content_type);
+        if (data->part[i].content_id)
+            ogs_free(data->part[i].content_id);
+        if (data->part[i].content)
+            ogs_free(data->part[i].content);
+    }
+
+    if (data->header_field)
+        ogs_free(data->header_field);
+}
 
 static int on_header_field(
         multipart_parser *parser, const char *at, size_t length)
@@ -3206,7 +3256,7 @@ static int on_part_data(
                     ogs_error("Overflow length [%d:%d]",
                         (int)data->part[data->num_of_part].content_length,
                         (int)length);
-                    ogs_assert_if_reached();
+                    data->parse_error = true;
                     return 0;
                 }
                 data->part[data->num_of_part].content_length += length;
@@ -3248,7 +3298,8 @@ static int parse_multipart(
         ogs_sbi_message_t *message, ogs_sbi_http_message_t *http)
 {
     char *boundary = NULL;
-    int i, preamble;
+    int i, preamble, rv;
+    size_t parsed;
 
     multipart_parser_settings settings;
     multipart_parser_data_t data;
@@ -3260,6 +3311,12 @@ static int parse_multipart(
 
     if (!http->content) {
         ogs_error("HTTP content NULL [%d]", (int)http->content_length);
+        return OGS_ERROR;
+    }
+
+    if (http->content_length < 2) {
+        ogs_error("Invalid HTTP content_length [%d]",
+                (int)http->content_length);
         return OGS_ERROR;
     }
 
@@ -3293,17 +3350,40 @@ static int parse_multipart(
 
     memset(&data, 0, sizeof(data));
     multipart_parser_set_data(parser, &data);
-    multipart_parser_execute(parser,
+    parsed = multipart_parser_execute(parser,
             http->content+preamble, http->content_length-preamble);
+
+    rv = OGS_ERROR;
+
+    if (parsed != (http->content_length - preamble) || data.parse_error) {
+        ogs_error("Multipart parse failed [%d:%d],[len:%d,preamble:%d,err:%d]",
+                (int)parsed, (int)(http->content_length - preamble),
+                (int)http->content_length, preamble, data.parse_error);
+        ogs_log_hexdump(OGS_LOG_ERROR,
+                (unsigned char *)http->content, http->content_length);
+        goto cleanup;
+    }
+
+    if (data.num_of_part > OGS_SBI_MAX_NUM_OF_PART) {
+        /* Overflow Issues #1247 */
+        ogs_error("Overflow num_of_part[%d]", data.num_of_part);
+        ogs_log_hexdump(OGS_LOG_ERROR,
+                (unsigned char *)http->content, http->content_length);
+        goto cleanup;
+    }
+
+    rv = OGS_OK;
+
+cleanup:
 
     multipart_parser_free(parser);
     ogs_free(boundary);
 
-    if (data.num_of_part > OGS_SBI_MAX_NUM_OF_PART) {
-        /* Overflow Issues #1247 */
-        ogs_fatal("Overflow num_of_part[%d]", data.num_of_part);
-        ogs_assert_if_reached();
+    if (rv != OGS_OK) {
+        multipart_parser_data_free(&data);
+        return OGS_ERROR;
     }
+
     for (i = 0; i < data.num_of_part; i++) {
         SWITCH(data.part[i].content_type)
         CASE(OGS_SBI_CONTENT_JSON_TYPE)
@@ -3410,7 +3490,8 @@ static bool build_multipart(
 
     ogs_random(digest, 16);
     strcpy(boundary, "=-");
-    ogs_base64_encode_binary(boundary + 2, digest, 16);
+    ogs_assert(ogs_base64_encode_from_buffer(
+            boundary + 2, sizeof(boundary) - 2, digest, sizeof(digest)) > 0);
 
     p = http->content = ogs_calloc(1, OGS_MAX_SDU_LEN);
     if (!p) {
@@ -3614,7 +3695,7 @@ char *ogs_sbi_discovery_option_build_service_names(
     return service_names;
 }
 
-void ogs_sbi_discovery_option_parse_service_names(
+int ogs_sbi_discovery_option_parse_service_names(
         ogs_sbi_discovery_option_t *discovery_option,
         char *service_names)
 {
@@ -3629,7 +3710,7 @@ void ogs_sbi_discovery_option_parse_service_names(
     if (!v) {
         ogs_error("ogs_sbi_url_decode() failed : service_names[%s]",
                 service_names);
-        return;
+        return OGS_ERROR;
     }
 
     /*
@@ -3650,11 +3731,20 @@ void ogs_sbi_discovery_option_parse_service_names(
      */
     token = ogs_strtok_r(v, ",", &saveptr);
     while (token != NULL) {
+        if (discovery_option->num_of_service_names >=
+                OGS_SBI_MAX_NUM_OF_SERVICE_TYPE) {
+            ogs_error("Too many service-names [%d:%d]",
+                    discovery_option->num_of_service_names + 1,
+                    OGS_SBI_MAX_NUM_OF_SERVICE_TYPE);
+            ogs_free(v);
+            return OGS_ERROR;
+        }
         ogs_sbi_discovery_option_add_service_names(discovery_option, token);
         token = ogs_strtok_r(NULL, ",", &saveptr);
     }
 
     ogs_free(v);
+    return OGS_OK;
 }
 
 void ogs_sbi_discovery_option_add_snssais(
@@ -3707,7 +3797,7 @@ char *ogs_sbi_discovery_option_build_snssais(
 
     return v;
 }
-void ogs_sbi_discovery_option_parse_snssais(
+int ogs_sbi_discovery_option_parse_snssais(
         ogs_sbi_discovery_option_t *discovery_option, char *snssais)
 {
     cJSON *item = NULL;
@@ -3720,41 +3810,62 @@ void ogs_sbi_discovery_option_parse_snssais(
     v = ogs_sbi_url_decode(snssais);
     if (!v) {
         ogs_error("ogs_sbi_url_decode() failed : snssais[%s]", snssais);
-        return;
+        return OGS_ERROR;
     }
 
     item = cJSON_Parse(v);
     if (!item) {
         ogs_error("Cannot parse snssais[%s]", snssais);
         ogs_free(v);
-        return;
+        return OGS_ERROR;
+    }
+
+    if (!cJSON_IsArray(item)) {
+        ogs_error("snssais is not a JSON array [%s]", snssais);
+        cJSON_Delete(item);
+        ogs_free(v);
+        return OGS_ERROR;
     }
 
     cJSON_ArrayForEach(snssaiItem, item) {
-        if (cJSON_IsObject(snssaiItem)) {
-            OpenAPI_snssai_t *sNSSAI = OpenAPI_snssai_parseFromJSON(snssaiItem);
+        OpenAPI_snssai_t *sNSSAI = NULL;
+        ogs_s_nssai_t s_nssai;
 
-            if (sNSSAI) {
-                ogs_s_nssai_t s_nssai;
-
-                s_nssai.sst = sNSSAI->sst;
-                s_nssai.sd = ogs_s_nssai_sd_from_string(sNSSAI->sd);
-
-                ogs_sbi_discovery_option_add_snssais(
-                        discovery_option, &s_nssai);
-
-                OpenAPI_snssai_free(sNSSAI);
-            } else {
-                ogs_error("OpenAPI_snssai_parseFromJSON() failed : snssais[%s]",
-                        snssais);
-            }
-        } else {
-            ogs_error("Invalid cJSON Type in snssias[%s]", snssais);
+        if (discovery_option->num_of_snssais >= OGS_MAX_NUM_OF_SLICE) {
+            ogs_error("Too many snssais [%d:%d]",
+                    discovery_option->num_of_snssais + 1,
+                    OGS_MAX_NUM_OF_SLICE);
+            cJSON_Delete(item);
+            ogs_free(v);
+            return OGS_ERROR;
         }
+
+        if (!cJSON_IsObject(snssaiItem)) {
+            ogs_error("Invalid cJSON Type in snssais[%s]", snssais);
+            cJSON_Delete(item);
+            ogs_free(v);
+            return OGS_ERROR;
+        }
+
+        sNSSAI = OpenAPI_snssai_parseFromJSON(snssaiItem);
+        if (!sNSSAI) {
+            ogs_error("OpenAPI_snssai_parseFromJSON() failed : snssais[%s]",
+                    snssais);
+            cJSON_Delete(item);
+            ogs_free(v);
+            return OGS_ERROR;
+        }
+
+        s_nssai.sst = sNSSAI->sst;
+        s_nssai.sd = ogs_s_nssai_sd_from_string(sNSSAI->sd);
+
+        ogs_sbi_discovery_option_add_snssais(discovery_option, &s_nssai);
+        OpenAPI_snssai_free(sNSSAI);
     }
     cJSON_Delete(item);
 
     ogs_free(v);
+    return OGS_OK;
 }
 
 void ogs_sbi_discovery_option_set_guami(
@@ -3792,10 +3903,11 @@ char *ogs_sbi_discovery_option_build_guami(
     return v;
 }
 
-void ogs_sbi_discovery_option_parse_guami(
+int ogs_sbi_discovery_option_parse_guami(
         ogs_sbi_discovery_option_t *discovery_option, char *guami)
 {
     OpenAPI_guami_t *Guami = NULL;
+    ogs_guami_t parsed_guami;
     cJSON *guamItem = NULL;
     char *v = NULL;
 
@@ -3805,30 +3917,38 @@ void ogs_sbi_discovery_option_parse_guami(
     v = ogs_sbi_url_decode(guami);
     if (!v) {
         ogs_error("ogs_sbi_url_decode() failed : guami[%s]", guami);
-        return;
+        return OGS_ERROR;
     }
 
     guamItem = cJSON_Parse(v);
     if (!guamItem) {
         ogs_error("Cannot parse guami[%s]", guami);
         ogs_free(v);
-        return;
+        return OGS_ERROR;
+    }
+
+    if (!cJSON_IsObject(guamItem)) {
+        ogs_error("guami is not a JSON object [%s]", guami);
+        cJSON_Delete(guamItem);
+        ogs_free(v);
+        return OGS_ERROR;
     }
 
     Guami = OpenAPI_guami_parseFromJSON(guamItem);
-
-    if (Guami) {
-        ogs_guami_t guami;
-        ogs_sbi_parse_guami(&guami, Guami);
-        ogs_sbi_discovery_option_set_guami(discovery_option, &guami);
-        OpenAPI_guami_free(Guami);
-    } else {
-        ogs_error("OpenAPI_guami_parseFromJSON() failed : guami[%s]",
-                guami);
+    if (!Guami) {
+        ogs_error("OpenAPI_guami_parseFromJSON() failed : guami[%s]", guami);
+        cJSON_Delete(guamItem);
+        ogs_free(v);
+        return OGS_ERROR;
     }
+
+    ogs_sbi_parse_guami(&parsed_guami, Guami);
+    ogs_sbi_discovery_option_set_guami(discovery_option, &parsed_guami);
+    OpenAPI_guami_free(Guami);
     cJSON_Delete(guamItem);
 
     ogs_free(v);
+    return OGS_OK;
 }
 
 void ogs_sbi_discovery_option_set_tai(
@@ -3871,9 +3991,11 @@ char *ogs_sbi_discovery_option_build_tai(
 
     return v;
 }
-void ogs_sbi_discovery_option_parse_tai(
+int ogs_sbi_discovery_option_parse_tai(
         ogs_sbi_discovery_option_t *discovery_option, char *tai)
 {
+    OpenAPI_tai_t *Tai = NULL;
+    ogs_5gs_tai_t parsed_tai;
     cJSON *taiItem = NULL;
     char *v = NULL;
 
@@ -3883,42 +4005,45 @@ void ogs_sbi_discovery_option_parse_tai(
     v = ogs_sbi_url_decode(tai);
     if (!v) {
         ogs_error("ogs_sbi_url_decode() failed : tai[%s]", tai);
-        return;
+        return OGS_ERROR;
     }
 
     taiItem = cJSON_Parse(v);
     if (!taiItem) {
         ogs_error("Cannot parse tai[%s]", tai);
         ogs_free(v);
-        return;
+        return OGS_ERROR;
     }
 
-    if (cJSON_IsObject(taiItem)) {
-        OpenAPI_tai_t *Tai = OpenAPI_tai_parseFromJSON(taiItem);
-
-        if (Tai) {
-            ogs_5gs_tai_t tai;
-
-            memset(&tai, 0, sizeof(tai));
-
-            if (Tai->plmn_id)
-                ogs_sbi_parse_plmn_id(&tai.plmn_id, Tai->plmn_id);
-            if (Tai->tac)
-                tai.tac = ogs_uint24_from_string_hexadecimal(Tai->tac);
-
-            ogs_sbi_discovery_option_set_tai(discovery_option, &tai);
-
-            OpenAPI_tai_free(Tai);
-        } else {
-            ogs_error("OpenAPI_snssai_parseFromJSON() failed : tai[%s]",
-                    tai);
-        }
-    } else {
-        ogs_error("Invalid cJSON Type in snssias[%s]", tai);
+    if (!cJSON_IsObject(taiItem)) {
+        ogs_error("tai is not a JSON object [%s]", tai);
+        cJSON_Delete(taiItem);
+        ogs_free(v);
+        return OGS_ERROR;
     }
+
+    Tai = OpenAPI_tai_parseFromJSON(taiItem);
+    if (!Tai) {
+        ogs_error("OpenAPI_tai_parseFromJSON() failed : tai[%s]", tai);
+        cJSON_Delete(taiItem);
+        ogs_free(v);
+        return OGS_ERROR;
+    }
+
+    memset(&parsed_tai, 0, sizeof(parsed_tai));
+
+    if (Tai->plmn_id)
+        ogs_sbi_parse_plmn_id(&parsed_tai.plmn_id, Tai->plmn_id);
+    if (Tai->tac)
+        parsed_tai.tac = ogs_uint24_from_string_hexadecimal(Tai->tac);
+
+    ogs_sbi_discovery_option_set_tai(discovery_option, &parsed_tai);
+
+    OpenAPI_tai_free(Tai);
     cJSON_Delete(taiItem);
 
     ogs_free(v);
+    return OGS_OK;
 }
 
 void ogs_sbi_discovery_option_add_target_plmn_list(
@@ -3998,35 +4123,51 @@ int ogs_sbi_discovery_option_parse_plmn_list(
     cJSON *PlmnIdJSON = NULL;
     OpenAPI_list_t *PlmnList = NULL;
     OpenAPI_plmn_id_t *PlmnId = NULL;
-    int num_of_plmn_list = 0;
+    int num_of_plmn_list = -1;
 
     ogs_assert(v);
     ogs_assert(plmn_list);
 
     item = cJSON_Parse(v);
-    if (item) {
-        PlmnList = OpenAPI_list_create();
-        ogs_assert(PlmnList);
-        cJSON_ArrayForEach(PlmnIdJSON, item) {
-            if (!cJSON_IsObject(PlmnIdJSON)) {
-                ogs_error("Unknown JSON");
-                goto cleanup;
-            }
+    if (!item) {
+        ogs_error("Cannot parse PLMN list [%s]", v);
+        return -1;
+    }
 
-            PlmnId = OpenAPI_plmn_id_parseFromJSON(PlmnIdJSON);
-            if (!PlmnId) {
-                ogs_error("No PlmnId");
-                goto cleanup;
-            }
+    if (!cJSON_IsArray(item)) {
+        ogs_error("PLMN list is not a JSON array [%s]", v);
+        goto cleanup;
+    }
 
-            OpenAPI_list_add(PlmnList, PlmnId);
+    if (cJSON_GetArraySize(item) > OGS_MAX_NUM_OF_PLMN) {
+        ogs_error("Too many PLMN IDs in list [%d:%d]",
+                cJSON_GetArraySize(item), OGS_MAX_NUM_OF_PLMN);
+        goto cleanup;
+    }
+
+    PlmnList = OpenAPI_list_create();
+    ogs_assert(PlmnList);
+
+    cJSON_ArrayForEach(PlmnIdJSON, item) {
+        if (!cJSON_IsObject(PlmnIdJSON)) {
+            ogs_error("Invalid cJSON Type in PLMN list [%s]", v);
+            goto cleanup;
         }
+
+        PlmnId = OpenAPI_plmn_id_parseFromJSON(PlmnIdJSON);
+        if (!PlmnId) {
+            ogs_error("OpenAPI_plmn_id_parseFromJSON() failed [%s]", v);
+            goto cleanup;
+        }
+
+        OpenAPI_list_add(PlmnList, PlmnId);
     }
 
     num_of_plmn_list = ogs_sbi_parse_plmn_list(plmn_list, PlmnList);
 
 cleanup:
-    ogs_sbi_free_plmn_list(PlmnList);
+    if (PlmnList)
+        ogs_sbi_free_plmn_list(PlmnList);
     cJSON_Delete(item);
 
     return num_of_plmn_list;

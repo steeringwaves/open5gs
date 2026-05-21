@@ -1339,6 +1339,9 @@ void ogs_sbi_nf_instance_clear(ogs_sbi_nf_instance_t *nf_instance)
     nf_instance->num_of_ipv6 = 0;
 
     nf_instance->num_of_allowed_nf_type = 0;
+
+    nf_instance->num_of_s_nssai = 0;
+    nf_instance->num_of_allowed_nssai = 0;
 }
 
 void ogs_sbi_nf_instance_remove(ogs_sbi_nf_instance_t *nf_instance)
@@ -1474,13 +1477,26 @@ ogs_sbi_nf_service_t *ogs_sbi_nf_service_add(
     ogs_assert(name);
 
     ogs_pool_alloc(&nf_service_pool, &nf_service);
-    ogs_assert(nf_service);
+    if (!nf_service) {
+        ogs_error("OVERFLOW nf_service_pool [pool:%llu]",
+                (unsigned long long)ogs_app()->pool.nf_service);
+        return NULL;
+    }
     memset(nf_service, 0, sizeof(ogs_sbi_nf_service_t));
 
     nf_service->id = ogs_strdup(id);
-    ogs_assert(nf_service->id);
+    if (!nf_service->id) {
+        ogs_error("ogs_strdup() failed for nf_service->id");
+        ogs_pool_free(&nf_service_pool, nf_service);
+        return NULL;
+    }
     nf_service->name = ogs_strdup(name);
-    ogs_assert(nf_service->name);
+    if (!nf_service->name) {
+        ogs_error("ogs_strdup() failed for nf_service->name");
+        ogs_free(nf_service->id);
+        ogs_pool_free(&nf_service_pool, nf_service);
+        return NULL;
+    }
     nf_service->scheme = scheme;
     ogs_assert(nf_service->scheme);
 
@@ -1673,7 +1689,9 @@ ogs_sbi_nf_info_t *ogs_sbi_nf_info_add(
 
     ogs_pool_alloc(&nf_info_pool, &nf_info);
     if (!nf_info) {
-        ogs_fatal("ogs_pool_alloc() failed");
+        ogs_error("OVERFLOW nf_info_pool [pool:%llu]",
+                (unsigned long long)(ogs_app()->pool.nf *
+                    OGS_MAX_NUM_OF_NF_INFO));
         return NULL;
     }
     memset(nf_info, 0, sizeof(*nf_info));
@@ -1934,7 +1952,15 @@ ogs_sbi_nf_service_t *ogs_sbi_nf_service_build_default(
     ogs_assert(scheme);
 
     nf_service = ogs_sbi_nf_service_add(nf_instance, id, name, scheme);
-    ogs_assert(nf_service);
+    if (!nf_service) {
+        ogs_error("Cannot build default NF service [%s]: "
+                "nf_service_pool exhausted at startup. "
+                "Increase 'max.peer' (current pool capacity = "
+                "max.peer * 16 = %llu).",
+                name,
+                (unsigned long long)ogs_app()->pool.nf_service);
+        return NULL;
+    }
 
     hostname = NULL;
     for (server = ogs_sbi_server_first();
@@ -2052,7 +2078,11 @@ static ogs_sbi_client_t *nf_instance_find_client(
                 return NULL;
             }
         }
-    }
+    } else
+        ogs_error("[%s] No instance-level endpoint, "
+                "client association skipped [id:%s]",
+                OpenAPI_nf_type_ToString(nf_instance->nf_type),
+                nf_instance->id);
 
     return client;
 }
@@ -2096,12 +2126,16 @@ static void nf_service_associate_client(ogs_sbi_nf_service_t *nf_service)
                 return;
             }
         }
-    }
+    } else
+        ogs_error("[%s] No service-level endpoint, "
+                "client association skipped [id:%s]",
+                nf_service->name, nf_service->id);
 
-    ogs_debug("[%s] NFService associated [%s]",
-            nf_service->name, nf_service->id);
-    if (client)
+    if (client) {
+        ogs_info("[%s] NFService associated [%s]",
+                nf_service->name, nf_service->id);
         OGS_SBI_SETUP_CLIENT(nf_service, client);
+    }
 }
 
 static void nf_service_associate_client_all(ogs_sbi_nf_instance_t *nf_instance)
@@ -2154,6 +2188,34 @@ bool ogs_sbi_discovery_option_is_matched(
         ogs_sbi_discovery_option_hnrf_uri_is_matched(
             nf_instance, discovery_option) == false)
         return false;
+
+    /*
+     * TS 33.518 4.2.2.2.1 - Target allowed_nssai filtering
+     *
+     * If the target NF registered with allowedNssais, it may only be
+     * discovered for queries whose S-NSSAI falls within that set.
+     */
+    if (nf_instance->num_of_allowed_nssai &&
+            discovery_option->num_of_snssais) {
+        bool nssai_allowed = false;
+
+        for (i = 0; i < discovery_option->num_of_snssais; i++) {
+            int j;
+            for (j = 0; j < nf_instance->num_of_allowed_nssai; j++) {
+                if (discovery_option->snssais[i].sst ==
+                        nf_instance->allowed_nssai[j].sst &&
+                    discovery_option->snssais[i].sd.v ==
+                        nf_instance->allowed_nssai[j].sd.v) {
+                    nssai_allowed = true;
+                    break;
+                }
+            }
+            if (nssai_allowed) break;
+        }
+
+        if (!nssai_allowed)
+            return false;
+    }
 
     /* Determine which SMF filters are requested */
     if (nf_instance->nf_type == OpenAPI_nf_type_SMF) {
@@ -2429,16 +2491,35 @@ void ogs_sbi_client_associate(ogs_sbi_nf_instance_t *nf_instance)
     ogs_assert(nf_instance);
 
     client = nf_instance_find_client(nf_instance);
-    ogs_assert(client);
+    if (client) {
+        ogs_info("[%s] NFInstance associated [%s]",
+                nf_instance->nf_type ?
+                    OpenAPI_nf_type_ToString(nf_instance->nf_type) : "NULL",
+                nf_instance->id);
 
-    ogs_debug("[%s] NFInstance associated [%s]",
-            nf_instance->nf_type ?
-                OpenAPI_nf_type_ToString(nf_instance->nf_type) : "NULL",
-            nf_instance->id);
-
-    OGS_SBI_SETUP_CLIENT(nf_instance, client);
+        OGS_SBI_SETUP_CLIENT(nf_instance, client);
+    }
 
     nf_service_associate_client_all(nf_instance);
+}
+
+bool nf_instance_has_usable_client(ogs_sbi_nf_instance_t *nf_instance)
+{
+    ogs_sbi_nf_service_t *nf_service = NULL;
+
+    ogs_assert(nf_instance);
+
+    /* Instance-level client */
+    if (NF_INSTANCE_CLIENT(nf_instance))
+        return true;
+
+    /* Service-level clients */
+    ogs_list_for_each(&nf_instance->nf_service_list, nf_service) {
+        if (nf_service->client)
+            return true;
+    }
+
+    return false;
 }
 
 int ogs_sbi_default_client_port(OpenAPI_uri_scheme_e scheme)
@@ -2645,6 +2726,16 @@ void ogs_sbi_xact_remove(ogs_sbi_xact_t *xact)
     if (xact->target_apiroot)
         ogs_free(xact->target_apiroot);
 
+    /*
+     * Release optional user context attached to the transaction.
+     * The transaction owns this memory and is responsible for
+     * freeing it when the transaction is destroyed.
+     */
+    if (xact->user_data) {
+        if (xact->user_data_free)
+            xact->user_data_free(xact->user_data);
+    }
+
     ogs_list_remove(&sbi_object->xact_list, xact);
     ogs_pool_id_free(&xact_pool, xact);
 }
@@ -2802,6 +2893,92 @@ void ogs_sbi_subscription_data_remove_all_by_nf_instance_id(
                 nf_instance_id) == 0) {
             ogs_sbi_subscription_data_remove(subscription_data);
         }
+    }
+}
+
+/*
+ * Send DELETE requests to NRF for all subscriptions belonging
+ * to the given NF instance before re-registration.
+ *
+ * This prevents subscription accumulation during repeated
+ * re-registration loops (e.g., heartbeat flapping).
+ *
+ * IMPORTANT:
+ * Local subscription_data MUST NOT be removed here.
+ * Cleanup is performed asynchronously in the unsubscribe
+ * response handler once NRF confirms deletion.
+ */
+void ogs_sbi_subscription_data_delete_and_remove_all_by_nf_instance_id(
+        const char *nf_instance_id)
+{
+    ogs_sbi_subscription_data_t *subscription_data = NULL;
+
+    ogs_assert(nf_instance_id);
+
+    ogs_list_for_each(
+            &ogs_sbi_self()->subscription_data_list, subscription_data) {
+
+        if (!subscription_data->id) {
+            ogs_error("Skip subscription delete: id is NULL");
+            continue;
+        }
+
+        if (!subscription_data->req_nf_instance_id) {
+            ogs_error("Skip subscription delete: req_nf_instance_id is NULL");
+            continue;
+        }
+
+        if (!subscription_data->resource_uri) {
+            ogs_error("Skip subscription delete: resource_uri is NULL");
+            continue;
+        }
+
+        if (strcmp(subscription_data->req_nf_instance_id,
+                   nf_instance_id) != 0) {
+            ogs_error("Skip subscription delete: nf_instance_id mismatch "
+                  "[target:%s, current:%s]",
+                  subscription_data->req_nf_instance_id, nf_instance_id);
+            continue;
+        }
+
+        /*
+         * Prevent duplicate DELETE transmissions.
+         * (Simple guard using existing state field or flag placeholder)
+         */
+        if (subscription_data->flags & OGS_SBI_SUBSCRIPTION_DELETE_SENT) {
+            ogs_debug("[%s] Skip subscription delete: DELETE already sent",
+                    subscription_data->id);
+            continue;
+        }
+
+        subscription_data->flags |= OGS_SBI_SUBSCRIPTION_DELETE_SENT;
+
+        /*
+         * If we have a subscription resource identifier,
+         * send DELETE to NRF to cleanup remote subscription state.
+         *
+         * Typical resource:
+         *   /nnrf-nfm/v1/subscriptions/{subscriptionId}
+         */
+        ogs_info("[%s] Sending NRF subscription DELETE before "
+                "NF re-registration", subscription_data->id);
+
+
+        /* Build DELETE request */
+        ogs_nnrf_nfm_send_nf_status_unsubscribe(subscription_data);
+
+        /*
+         * NOTE:
+         * Do NOT remove subscription_data here.
+         *
+         * Local cleanup is performed in the unsubscribe
+         * response handler once NRF confirms deletion.
+         *
+         * Removing here could lead to:
+         *   - Use-after-free
+         *   - Double free
+         *   - Dangling transaction context
+         */
     }
 }
 

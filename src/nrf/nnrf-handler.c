@@ -121,9 +121,42 @@ bool nrf_nnrf_handle_nf_register(ogs_sbi_nf_instance_t *nf_instance,
         }
     }
 
-    ogs_nnrf_nfm_handle_nf_profile(nf_instance, NFProfile);
+    if (ogs_nnrf_nfm_handle_nf_profile(nf_instance, NFProfile) == false) {
+        ogs_error("[%s] Invalid NFProfile", NFProfile->nf_instance_id);
 
+        /*
+         * Do not finalize or remove nf_instance here. This handler is called
+         * from the NRF NF state machine. The caller performs OGS_FSM_TRAN()
+         * on &nf_instance->sm immediately after this function returns, so
+         * freeing nf_instance here would cause a use-after-free.
+         *
+         * Return failure and let the FSM dispatcher perform cleanup after the
+         * transition to nrf_nf_state_exception.
+         */
+        ogs_assert(true == ogs_sbi_server_send_error(
+            stream, OGS_SBI_HTTP_STATUS_BAD_REQUEST,
+            recvmsg, "Invalid NFProfile", NFProfile->nf_instance_id, NULL));
+
+        return false;
+    }
     ogs_sbi_client_associate(nf_instance);
+
+    /* ---------------------------------------------------------- */
+    /* Validate usable endpoint after association                 */
+    /* ---------------------------------------------------------- */
+    if (!nf_instance_has_usable_client(nf_instance)) {
+
+        ogs_error("NFProfile has no usable endpoint: id=%s type=%s",
+            nf_instance->id,
+            OpenAPI_nf_type_ToString(nf_instance->nf_type));
+
+        ogs_assert(true ==
+            ogs_sbi_server_send_error(
+                stream, OGS_SBI_HTTP_STATUS_BAD_REQUEST, recvmsg,
+                "NFProfile has no usable endpoint", nf_instance->id, NULL));
+
+        return false;
+    }
 
     switch (nf_instance->nf_type) {
     case OpenAPI_nf_type_SEPP:
@@ -842,6 +875,13 @@ bool nrf_nnrf_handle_nf_status_unsubscribe(
         return false;
     }
 
+    ogs_info("[%s] Removing local subscription data after NRF unsubscribe "
+            "[duration:%lld,validity:%d.%06d]",
+            subscription_data->id,
+            (long long)subscription_data->validity_duration,
+            (int)ogs_time_sec(subscription_data->validity_duration),
+            (int)ogs_time_usec(subscription_data->validity_duration));
+
     ogs_assert(subscription_data->id);
     ogs_sbi_subscription_data_remove(subscription_data);
 
@@ -1053,6 +1093,54 @@ bool nrf_nnrf_handle_nf_discover(
         if (discovery_option->requester_features) {
             ogs_debug("requester-features[0x%llx]",
                 (long long)discovery_option->requester_features);
+        }
+    }
+
+    /*
+     * TS 33.518 4.2.2.2.1 - NF discovery authorization for specific slice
+     *
+     * When the discovery request carries S-NSSAI filters, verify that the
+     * requesting NF is authorized for those slices.  The requester's
+     * registered sNssais (from its NFProfile) define the set of slices
+     * it may legitimately query.  If the requester registered with sNssais
+     * and none of the requested slices match, reject with 403 Forbidden.
+     */
+    if (discovery_option &&
+            discovery_option->num_of_snssais &&
+            discovery_option->requester_nf_instance_id) {
+
+        ogs_sbi_nf_instance_t *requester = NULL;
+
+        requester = ogs_sbi_nf_instance_find(
+                        discovery_option->requester_nf_instance_id);
+        if (requester && requester->num_of_s_nssai) {
+            bool authorized = false;
+            int ri, qi;
+
+            for (qi = 0; qi < discovery_option->num_of_snssais; qi++) {
+                for (ri = 0; ri < requester->num_of_s_nssai; ri++) {
+                    if (discovery_option->snssais[qi].sst ==
+                            requester->s_nssai[ri].sst &&
+                        discovery_option->snssais[qi].sd.v ==
+                            requester->s_nssai[ri].sd.v) {
+                        authorized = true;
+                        break;
+                    }
+                }
+                if (authorized) break;
+            }
+
+            if (!authorized) {
+                ogs_error("NF [%s] not authorized for requested S-NSSAI",
+                        discovery_option->requester_nf_instance_id);
+                ogs_assert(true ==
+                    ogs_sbi_server_send_error(stream,
+                        OGS_SBI_HTTP_STATUS_FORBIDDEN,
+                        recvmsg,
+                        "Requester not authorized for requested S-NSSAI",
+                        discovery_option->requester_nf_instance_id, NULL));
+                return false;
+            }
         }
     }
 
@@ -1394,6 +1482,7 @@ static void handle_nf_discover_search_result(
 
     OpenAPI_list_for_each(SearchResult->nf_instances, node) {
         OpenAPI_nf_profile_t *NFProfile = NULL;
+        bool nf_instance_created = false;
 
         if (!node->data) continue;
 
@@ -1425,6 +1514,7 @@ static void handle_nf_discover_search_result(
             ogs_assert(nf_instance);
 
             ogs_sbi_nf_instance_set_id(nf_instance, NFProfile->nf_instance_id);
+            nf_instance_created = true;
 
             /*
              * If nrf_nf_fsm_init() is not executed, nf_instance->sm is NULL.
@@ -1444,7 +1534,24 @@ static void handle_nf_discover_search_result(
         }
 
         if (NF_INSTANCE_ID_IS_OTHERS(nf_instance->id)) {
-            ogs_nnrf_nfm_handle_nf_profile(nf_instance, NFProfile);
+            if (ogs_nnrf_nfm_handle_nf_profile(
+                        nf_instance, NFProfile) == false) {
+                ogs_error("[%s] (NF-discover) Invalid NFProfile [type:%s]",
+                        NFProfile->nf_instance_id,
+                        OpenAPI_nf_type_ToString(NFProfile->nf_type));
+
+                /*
+                 * Only roll back nf_instances we just created here. A
+                 * pre-existing cache entry will be corrected by the next
+                 * inter-NRF discovery cycle; removing it now would cause
+                 * a temporary blackhole. (No fsm_fini: this code path
+                 * never calls nrf_nf_fsm_init() for newly added entries
+                 * per the comment at line 1517-1522, so sm is NULL.)
+                 */
+                if (nf_instance_created)
+                    ogs_sbi_nf_instance_remove(nf_instance);
+                continue;
+            }
 
             ogs_sbi_client_associate(nf_instance);
 

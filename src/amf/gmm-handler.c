@@ -209,7 +209,20 @@ ogs_nas_5gmm_cause_t gmm_handle_registration_request(amf_ue_t *amf_ue,
             sizeof(ogs_nas_5gs_registration_type_t));
     amf_ue->nas.message_type = OGS_NAS_5GS_REGISTRATION_REQUEST;
 
-    if (registration_type->value == OGS_NAS_5GS_REGISTRATION_TYPE_INITIAL) {
+    /*
+     * TS 24.501 Table 9.11.3.7.1:
+     * Unused registration-type encodings shall be interpreted as
+     * "initial registration" by the network.
+     *
+     * Normalize here so subsequent transfer logic has a stable basis.
+     */
+    if (amf_ue->nas.registration.value == 0) {
+        ogs_error("Normalize reg_type[0] to INITIAL");
+        amf_ue->nas.registration.value = OGS_NAS_5GS_REGISTRATION_TYPE_INITIAL;
+    }
+
+    if (amf_ue->nas.registration.value ==
+            OGS_NAS_5GS_REGISTRATION_TYPE_INITIAL) {
         /*
          * Issue #2040
          *
@@ -579,24 +592,14 @@ bool gmm_registration_request_from_old_amf(amf_ue_t *amf_ue,
         return false;
     }
 
-    /*
-     * TODO : FIXME
-     *
-     * Typically, UEs send 5G-GUTIs with all 0. In such cases,
-     * we need to prevent context transfer betwen AMFs by the N14 interface
-     * because they are not included in served_guami.
-     *
-     * We don't yet know how to check for 5G GUTI conformance,
-     * so we've implemented the following as a temporary solution.
+    /* Robustness: many devices (and fuzzers) send a "placeholder" 5G-GUTI
+     * (AMF-ID zero + M-TMSI zero). Treat it as non-actionable for context
+     * transfer regardless of PLMN digits, and fall back to Identity Request /
+     * normal registration handling.
      */
-    if ((amf_ue->old_guti.amf_id.region == 0 &&
-         amf_ue->old_guti.amf_id.set2 == 0) &&
-        (amf_ue->old_guti.nas_plmn_id.mcc1 == 0 &&
-         amf_ue->old_guti.nas_plmn_id.mcc2 == 0 &&
-         amf_ue->old_guti.nas_plmn_id.mcc3 == 0) &&
-        (amf_ue->old_guti.nas_plmn_id.mnc1 == 0 &&
-         amf_ue->old_guti.nas_plmn_id.mnc2 == 0 &&
-         amf_ue->old_guti.nas_plmn_id.mnc3 == 0)) {
+    if (amf_ue->old_guti.amf_id.region == 0 &&
+        amf_ue->old_guti.amf_id.set2 == 0 &&
+        amf_ue->old_guti.m_tmsi == 0) {
         return false;
     }
 
@@ -1752,6 +1755,7 @@ static ogs_nas_5gmm_cause_t gmm_handle_nas_message_container(
         ogs_nas_message_container_t *nas_message_container)
 {
     int gmm_cause;
+    uint8_t expected_message_type = 0;
 
     ogs_pkbuf_t *nasbuf = NULL;
     ogs_nas_5gs_message_t nas_message;
@@ -1806,6 +1810,55 @@ static ogs_nas_5gmm_cause_t gmm_handle_nas_message_container(
         ogs_error("ogs_nas_5gmm_decode() failed");
         ogs_pkbuf_free(nasbuf);
         return OGS_5GMM_CAUSE_SEMANTICALLY_INCORRECT_MESSAGE;
+    }
+
+    /*
+     * 3GPP TS 24.501 4.4.6 / TS 33.501 6.4.6
+     *
+     * Only an initial NAS message (REGISTRATION REQUEST or SERVICE REQUEST)
+     * may be carried in the NAS message container IE. Reject any other
+     * inner message type with SEMANTICALLY_INCORRECT_MESSAGE rather than
+     * dispatching it.
+     */
+    switch (nas_message.gmm.h.message_type) {
+    case OGS_NAS_5GS_REGISTRATION_REQUEST:
+    case OGS_NAS_5GS_SERVICE_REQUEST:
+        break;
+    default:
+        ogs_error("[%s] Unexpected NAS message type [%d] in "
+                "NAS message container [outer:%d]",
+                amf_ue->supi,
+                nas_message.gmm.h.message_type, message_type);
+        ogs_pkbuf_free(nasbuf);
+        return OGS_5GMM_CAUSE_SEMANTICALLY_INCORRECT_MESSAGE;
+    }
+
+    /*
+     * The protected NAS message must match the procedure being resumed.
+     * In SecurityModeComplete, the procedure is the previously stored
+     * initial NAS message. Otherwise, it is the current outer message.
+     *
+     * Without this check, a SECURITY MODE COMPLETE container can carry an
+     * initial NAS message of a different type than the one that triggered
+     * the security mode control procedure. The AMF would then resume on
+     * the other path, bypassing per-procedure preconditions (e.g.
+     * allowed_nssai is populated only on the registration path) and reach
+     * ngap_ue_build_initial_context_setup_request() with an empty
+     * allowed_nssai, hitting ogs_assert(amf_ue->allowed_nssai.num_of_s_nssai)
+     * and aborting open5gs-amfd (issue #4422).
+     */
+    expected_message_type =
+        (message_type == OGS_NAS_5GS_SECURITY_MODE_COMPLETE) ?
+            amf_ue->nas.message_type : message_type;
+    if (nas_message.gmm.h.message_type != expected_message_type) {
+        ogs_error("[%s] NAS message type mismatch in NAS message container "
+                "[expected:%d, received:%d, outer:%d]",
+                amf_ue->supi,
+                expected_message_type,
+                nas_message.gmm.h.message_type,
+                message_type);
+        ogs_pkbuf_free(nasbuf);
+        return OGS_5GMM_CAUSE_MESSAGE_NOT_COMPATIBLE_WITH_THE_PROTOCOL_STATE;
     }
 
     gmm_cause = OGS_5GMM_CAUSE_SEMANTICALLY_INCORRECT_MESSAGE;

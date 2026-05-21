@@ -21,13 +21,13 @@
 
 static void handle_nf_service(
         ogs_sbi_nf_service_t *nf_service, OpenAPI_nf_service_t *NFService);
-static void handle_smf_info(
+static bool handle_smf_info(
         ogs_sbi_nf_instance_t *nf_instance, OpenAPI_smf_info_t *SmfInfo);
-static void handle_scp_info(
+static bool handle_scp_info(
         ogs_sbi_nf_instance_t *nf_instance, OpenAPI_scp_info_t *ScpInfo);
-static void handle_sepp_info(
+static bool handle_sepp_info(
         ogs_sbi_nf_instance_t *nf_instance, OpenAPI_sepp_info_t *SeppInfo);
-static void handle_amf_info(
+static bool handle_amf_info(
         ogs_sbi_nf_instance_t *nf_instance, OpenAPI_amf_info_t *AmfInfo);
 
 void ogs_nnrf_nfm_handle_nf_register(
@@ -50,7 +50,7 @@ void ogs_nnrf_nfm_handle_nf_register(
         nf_instance->time.heartbeat_interval = NFProfile->heart_beat_timer;
 
     if (NFProfile->plmn_list) {
-        nf_instance->num_of_plmn_id = 0;
+        ogs_local_conf()->num_of_serving_plmn_id = 0;
         OpenAPI_list_for_each(NFProfile->plmn_list, node) {
             OpenAPI_plmn_id_t *PlmnId = node->data;
             if (PlmnId) {
@@ -72,7 +72,7 @@ void ogs_nnrf_nfm_handle_nf_register(
     }
 }
 
-void ogs_nnrf_nfm_handle_nf_profile(
+bool ogs_nnrf_nfm_handle_nf_profile(
         ogs_sbi_nf_instance_t *nf_instance, OpenAPI_nf_profile_t *NFProfile)
 {
     int rv;
@@ -181,6 +181,45 @@ void ogs_nnrf_nfm_handle_nf_profile(
         }
     }
 
+    /*
+     * TS 33.518 4.2.2.2.1 - Store S-NSSAIs for slice-based discovery
+     * authorization.  sNssais identifies the slices this NF serves;
+     * allowedNssais restricts for which slices the NF may be discovered.
+     */
+    nf_instance->num_of_s_nssai = 0;
+    OpenAPI_list_for_each(NFProfile->s_nssais, node) {
+        OpenAPI_ext_snssai_t *sNssai = node->data;
+        if (sNssai) {
+            if (nf_instance->num_of_s_nssai >= OGS_MAX_NUM_OF_SLICE) {
+                ogs_warn("Overflow: NFProfile.sNssais exceeds %d",
+                        OGS_MAX_NUM_OF_SLICE);
+                break;
+            }
+            nf_instance->s_nssai[nf_instance->num_of_s_nssai].sst =
+                sNssai->sst;
+            nf_instance->s_nssai[nf_instance->num_of_s_nssai].sd =
+                ogs_s_nssai_sd_from_string(sNssai->sd);
+            nf_instance->num_of_s_nssai++;
+        }
+    }
+
+    nf_instance->num_of_allowed_nssai = 0;
+    OpenAPI_list_for_each(NFProfile->allowed_nssais, node) {
+        OpenAPI_ext_snssai_t *sNssai = node->data;
+        if (sNssai) {
+            if (nf_instance->num_of_allowed_nssai >= OGS_MAX_NUM_OF_SLICE) {
+                ogs_warn("Overflow: NFProfile.allowedNssais exceeds %d",
+                        OGS_MAX_NUM_OF_SLICE);
+                break;
+            }
+            nf_instance->allowed_nssai[nf_instance->num_of_allowed_nssai].sst =
+                sNssai->sst;
+            nf_instance->allowed_nssai[nf_instance->num_of_allowed_nssai].sd =
+                ogs_s_nssai_sd_from_string(sNssai->sd);
+            nf_instance->num_of_allowed_nssai++;
+        }
+    }
+
     OpenAPI_list_for_each(NFProfile->nf_services, node) {
         ogs_sbi_nf_service_t *nf_service = NULL;
         OpenAPI_nf_service_t *NFService = node->data;
@@ -212,7 +251,11 @@ void ogs_nnrf_nfm_handle_nf_profile(
                             nf_instance,
                             NFService->service_instance_id,
                             NFService->service_name, NFService->scheme);
-            ogs_assert(nf_service);
+            if (!nf_service) {
+                ogs_error("Failed to add NFService [%s]",
+                        NFService->service_instance_id);
+                return false;
+            }
         }
 
         ogs_sbi_nf_service_clear(nf_service);
@@ -255,7 +298,11 @@ void ogs_nnrf_nfm_handle_nf_profile(
                                 nf_instance,
                                 NFService->service_instance_id,
                                 NFService->service_name, NFService->scheme);
-                ogs_assert(nf_service);
+                if (!nf_service) {
+                    ogs_error("Failed to add NFService [%s]",
+                            NFService->service_instance_id);
+                    return false;
+                }
             }
 
             ogs_sbi_nf_service_clear(nf_service);
@@ -266,26 +313,34 @@ void ogs_nnrf_nfm_handle_nf_profile(
 
     ogs_sbi_nf_info_remove_all(&nf_instance->nf_info_list);
 
-    if (NFProfile->smf_info)
-        handle_smf_info(nf_instance, NFProfile->smf_info);
+    if (NFProfile->smf_info &&
+            handle_smf_info(nf_instance, NFProfile->smf_info) == false)
+        return false;
 
     OpenAPI_list_for_each(NFProfile->smf_info_list, node) {
         OpenAPI_map_t *SmfInfoMap = node->data;
-        if (SmfInfoMap && SmfInfoMap->value)
-            handle_smf_info(nf_instance, SmfInfoMap->value);
+        if (SmfInfoMap && SmfInfoMap->value &&
+                handle_smf_info(nf_instance, SmfInfoMap->value) == false)
+            return false;
     }
-    if (NFProfile->amf_info)
-        handle_amf_info(nf_instance, NFProfile->amf_info);
+    if (NFProfile->amf_info &&
+            handle_amf_info(nf_instance, NFProfile->amf_info) == false)
+        return false;
 
     OpenAPI_list_for_each(NFProfile->amf_info_list, node) {
         OpenAPI_map_t *AmfInfoMap = node->data;
-        if (AmfInfoMap && AmfInfoMap->value)
-            handle_amf_info(nf_instance, AmfInfoMap->value);
+        if (AmfInfoMap && AmfInfoMap->value &&
+                handle_amf_info(nf_instance, AmfInfoMap->value) == false)
+            return false;
     }
-    if (NFProfile->scp_info)
-        handle_scp_info(nf_instance, NFProfile->scp_info);
-    if (NFProfile->sepp_info)
-        handle_sepp_info(nf_instance, NFProfile->sepp_info);
+    if (NFProfile->scp_info &&
+            handle_scp_info(nf_instance, NFProfile->scp_info) == false)
+        return false;
+    if (NFProfile->sepp_info &&
+            handle_sepp_info(nf_instance, NFProfile->sepp_info) == false)
+        return false;
+
+    return true;
 }
 
 static void handle_nf_service(
@@ -387,9 +442,10 @@ static void handle_nf_service(
         nf_service->load = NFService->load;
 }
 
-static void handle_smf_info(
+static bool handle_smf_info(
         ogs_sbi_nf_instance_t *nf_instance, OpenAPI_smf_info_t *SmfInfo)
 {
+    bool rv = true;
     ogs_sbi_nf_info_t *nf_info = NULL;
 
     OpenAPI_list_t *sNssaiSmfInfoList = NULL;
@@ -412,13 +468,21 @@ static void handle_smf_info(
 
     nf_info = ogs_sbi_nf_info_add(
             &nf_instance->nf_info_list, OpenAPI_nf_type_SMF);
-    ogs_assert(nf_info);
+    if (!nf_info) {
+        ogs_error("Failed to add SMF nfInfo");
+        return false;
+    }
 
     sNssaiSmfInfoList = SmfInfo->s_nssai_smf_info_list;
     OpenAPI_list_for_each(sNssaiSmfInfoList, node) {
         sNssaiSmfInfoItem = node->data;
         if (sNssaiSmfInfoItem) {
-            ogs_assert(nf_info->smf.num_of_slice < OGS_MAX_NUM_OF_SLICE);
+            if (nf_info->smf.num_of_slice >= OGS_MAX_NUM_OF_SLICE) {
+                ogs_error("OVERFLOW Slice [%d:%d]",
+                        nf_info->smf.num_of_slice, OGS_MAX_NUM_OF_SLICE);
+                rv = false;
+                break;
+            }
 
             DnnSmfInfoList = sNssaiSmfInfoItem->dnn_smf_info_list;
             OpenAPI_list_for_each(DnnSmfInfoList, node2) {
@@ -427,16 +491,27 @@ static void handle_smf_info(
                     int dnn_index = nf_info->smf.slice
                         [nf_info->smf.num_of_slice].num_of_dnn;
 
-                    ogs_assert(dnn_index < OGS_MAX_NUM_OF_DNN);
+                    if (dnn_index >= OGS_MAX_NUM_OF_DNN) {
+                        ogs_error("OVERFLOW DNN [%d:%d]",
+                                dnn_index, OGS_MAX_NUM_OF_DNN);
+                        rv = false;
+                        break;
+                    }
                     nf_info->smf.slice[nf_info->smf.num_of_slice].
                         dnn[dnn_index] = ogs_strdup(DnnSmfInfoItem->dnn);
-                    ogs_assert(
-                        nf_info->smf.slice[nf_info->smf.num_of_slice].
-                            dnn[dnn_index]);
+                    if (!nf_info->smf.slice[nf_info->smf.num_of_slice].
+                            dnn[dnn_index]) {
+                        ogs_error("No memory for DNN");
+                        rv = false;
+                        break;
+                    }
                     nf_info->smf.slice[nf_info->smf.num_of_slice].
                         num_of_dnn++;
                 }
             }
+
+            if (rv == false)
+                break;
 
             if (!nf_info->smf.slice[nf_info->smf.num_of_slice].num_of_dnn) {
                 ogs_error("No DNN");
@@ -456,10 +531,12 @@ static void handle_smf_info(
         }
     }
 
+    if (rv == false) goto out;
+
     if (nf_info->smf.num_of_slice == 0) {
         ogs_error("No S-NSSAI(DNN) in smfInfo");
         ogs_sbi_nf_info_remove(&nf_instance->nf_info_list, nf_info);
-        return;
+        return true;
     }
 
     TaiList = SmfInfo->tai_list;
@@ -467,7 +544,12 @@ static void handle_smf_info(
         TaiItem = node->data;
         if (TaiItem && TaiItem->plmn_id && TaiItem->tac) {
             ogs_5gs_tai_t *nr_tai = NULL;
-            ogs_assert(nf_info->smf.num_of_nr_tai < OGS_MAX_NUM_OF_TAI);
+            if (nf_info->smf.num_of_nr_tai >= OGS_MAX_NUM_OF_TAI) {
+                ogs_error("OVERFLOW TAI [%d:%d]",
+                        nf_info->smf.num_of_nr_tai, OGS_MAX_NUM_OF_TAI);
+                rv = false;
+                break;
+            }
 
             nr_tai = &nf_info->smf.nr_tai[nf_info->smf.num_of_nr_tai];
             ogs_assert(nr_tai);
@@ -478,6 +560,8 @@ static void handle_smf_info(
         }
     }
 
+    if (rv == false) goto out;
+
     TaiRangeList = SmfInfo->tai_range_list;
     OpenAPI_list_for_each(TaiRangeList, node) {
         TaiRangeItem = node->data;
@@ -487,6 +571,7 @@ static void handle_smf_info(
             if (nf_info->smf.num_of_nr_tai_range >= OGS_MAX_NUM_OF_TAI) {
                 ogs_error("OVERFLOW TaiRangeItem [%d:%d]",
                         nf_info->smf.num_of_nr_tai_range, OGS_MAX_NUM_OF_TAI);
+                rv = false;
                 break;
             }
 
@@ -502,7 +587,12 @@ static void handle_smf_info(
                         TacRangeItem->start && TacRangeItem->end) {
                     int tac_index = nf_info->smf.nr_tai_range
                         [nf_info->smf.num_of_nr_tai_range].num_of_tac_range;
-                    ogs_assert(tac_index < OGS_MAX_NUM_OF_TAI);
+                    if (tac_index >= OGS_MAX_NUM_OF_TAI) {
+                        ogs_error("OVERFLOW TAI [%d:%d]",
+                                tac_index, OGS_MAX_NUM_OF_TAI);
+                        rv = false;
+                        break;
+                    }
 
                     nf_info->smf.nr_tai_range
                         [nf_info->smf.num_of_nr_tai_range].
@@ -521,12 +611,36 @@ static void handle_smf_info(
                 }
             }
 
+            if (rv == false)
+                break;
+
             nf_info->smf.num_of_nr_tai_range++;
         }
     }
+
+out:
+    if (rv == false) {
+        ogs_sbi_nf_info_remove(&nf_instance->nf_info_list, nf_info);
+        return false;
+    }
+
+    return true;
 }
 
-static void handle_scp_info(
+static void scp_info_free(ogs_sbi_scp_info_t *scp_info)
+{
+    int i;
+
+    ogs_assert(scp_info);
+
+    for (i = 0; i < scp_info->num_of_domain; i++) {
+        ogs_free(scp_info->domain[i].name);
+        ogs_free(scp_info->domain[i].fqdn);
+    }
+    memset(scp_info, 0, sizeof(*scp_info));
+}
+
+static bool handle_scp_info(
         ogs_sbi_nf_instance_t *nf_instance, OpenAPI_scp_info_t *ScpInfo)
 {
     ogs_sbi_nf_info_t *nf_info = NULL;
@@ -576,6 +690,11 @@ static void handle_scp_info(
     OpenAPI_list_for_each(ScpInfo->scp_domain_info_list, node) {
         DomainInfoMap = node->data;
         if (DomainInfoMap && DomainInfoMap->key && DomainInfoMap->value) {
+            if (scp_info.num_of_domain >= OGS_MAX_NUM_OF_SCP_DOMAIN) {
+                ogs_warn("Exceeded maximum SCP domains (%d)",
+                        OGS_MAX_NUM_OF_SCP_DOMAIN);
+                break;
+            }
             scp_info.domain[scp_info.num_of_domain].name =
                 ogs_strdup(DomainInfoMap->key);
             DomainInfo = DomainInfoMap->value;
@@ -615,16 +734,23 @@ static void handle_scp_info(
         }
     }
 
-    if (scp_info.http.presence || scp_info.https.presence) {
+    if (scp_info.http.presence || scp_info.https.presence ||
+        scp_info.num_of_domain) {
         nf_info = ogs_sbi_nf_info_add(
                 &nf_instance->nf_info_list, OpenAPI_nf_type_SCP);
-        ogs_assert(nf_info);
+        if (!nf_info) {
+            ogs_error("Failed to add SCP nfInfo");
+            scp_info_free(&scp_info);
+            return false;
+        }
 
         memcpy(&nf_info->scp, &scp_info, sizeof(scp_info));
     }
+
+    return true;
 }
 
-static void handle_sepp_info(
+static bool handle_sepp_info(
         ogs_sbi_nf_instance_t *nf_instance, OpenAPI_sepp_info_t *SeppInfo)
 {
     ogs_sbi_nf_info_t *nf_info = NULL;
@@ -674,7 +800,10 @@ static void handle_sepp_info(
     if (http.presence || https.presence) {
         nf_info = ogs_sbi_nf_info_add(
                 &nf_instance->nf_info_list, OpenAPI_nf_type_SEPP);
-        ogs_assert(nf_info);
+        if (!nf_info) {
+            ogs_error("Failed to add SEPP nfInfo");
+            return false;
+        }
 
         nf_info->sepp.http.presence = http.presence;
         nf_info->sepp.http.port = http.port;
@@ -682,11 +811,14 @@ static void handle_sepp_info(
         nf_info->sepp.https.presence = https.presence;
         nf_info->sepp.https.port = https.port;
     }
+
+    return true;
 }
 
-static void handle_amf_info(
+static bool handle_amf_info(
         ogs_sbi_nf_instance_t *nf_instance, OpenAPI_amf_info_t *AmfInfo)
 {
+    bool rv = true;
     ogs_sbi_nf_info_t *nf_info = NULL;
     OpenAPI_list_t *GuamiList = NULL;
     OpenAPI_guami_t *GuamiAmfInfoItem = NULL;
@@ -703,7 +835,10 @@ static void handle_amf_info(
 
     nf_info = ogs_sbi_nf_info_add(
             &nf_instance->nf_info_list, OpenAPI_nf_type_AMF);
-    ogs_assert(nf_info);
+    if (!nf_info) {
+        ogs_error("Failed to add AMF nfInfo");
+        return false;
+    }
 
     nf_info->amf.amf_set_id = ogs_uint64_from_string_hexadecimal(
             AmfInfo->amf_set_id);
@@ -714,7 +849,12 @@ static void handle_amf_info(
     OpenAPI_list_for_each(GuamiList, node) {
         GuamiAmfInfoItem = node->data;
         if (GuamiAmfInfoItem) {
-            ogs_assert(nf_info->amf.num_of_guami < OGS_MAX_NUM_OF_SERVED_GUAMI);
+            if (nf_info->amf.num_of_guami >= OGS_MAX_NUM_OF_SERVED_GUAMI) {
+                ogs_error("OVERFLOW Guami [%d:%d]",
+                        nf_info->amf.num_of_guami, OGS_MAX_NUM_OF_SERVED_GUAMI);
+                rv = false;
+                break;
+            }
 
             if (GuamiAmfInfoItem->amf_id && GuamiAmfInfoItem->plmn_id &&
                     GuamiAmfInfoItem->plmn_id->mnc &&
@@ -727,6 +867,7 @@ static void handle_amf_info(
             }
         }
     }
+    if (rv == false) goto out;
 
     TaiList = AmfInfo->tai_list;
     OpenAPI_list_for_each(TaiList, node) {
@@ -737,6 +878,7 @@ static void handle_amf_info(
             if (nf_info->amf.num_of_nr_tai >= OGS_MAX_NUM_OF_TAI) {
                 ogs_error("OVERFLOW TaiItem [%d:%d]",
                         nf_info->amf.num_of_nr_tai, OGS_MAX_NUM_OF_TAI);
+                rv = false;
                 break;
             }
 
@@ -747,18 +889,17 @@ static void handle_amf_info(
             nf_info->amf.num_of_nr_tai++;
         }
     }
+    if (rv == false) goto out;
 
     TaiRangeList = AmfInfo->tai_range_list;
     OpenAPI_list_for_each(TaiRangeList, node) {
         TaiRangeItem = node->data;
         if (TaiRangeItem && TaiRangeItem->plmn_id &&
                 TaiRangeItem->tac_range_list) {
-            ogs_assert(nf_info->amf.num_of_nr_tai_range <
-                    OGS_MAX_NUM_OF_TAI);
-
             if (nf_info->amf.num_of_nr_tai_range >= OGS_MAX_NUM_OF_TAI) {
                 ogs_error("OVERFLOW TaiRangeItem [%d:%d]",
                         nf_info->amf.num_of_nr_tai_range, OGS_MAX_NUM_OF_TAI);
+                rv = false;
                 break;
             }
 
@@ -774,7 +915,12 @@ static void handle_amf_info(
                         TacRangeItem->start && TacRangeItem->end) {
                     int tac_index = nf_info->amf.nr_tai_range
                         [nf_info->amf.num_of_nr_tai_range].num_of_tac_range;
-                    ogs_assert(tac_index < OGS_MAX_NUM_OF_TAI);
+                    if (tac_index >= OGS_MAX_NUM_OF_TAI) {
+                        ogs_error("OVERFLOW TAI [%d:%d]",
+                                tac_index, OGS_MAX_NUM_OF_TAI);
+                        rv = false;
+                        break;
+                    }
 
                     nf_info->amf.nr_tai_range
                         [nf_info->amf.num_of_nr_tai_range].start[tac_index] =
@@ -789,9 +935,21 @@ static void handle_amf_info(
                         [nf_info->amf.num_of_nr_tai_range].num_of_tac_range++;
                 }
             }
+
+            if (rv == false)
+                break;
+
             nf_info->amf.num_of_nr_tai_range++;
         }
     }
+
+out:
+    if (rv == false) {
+        ogs_sbi_nf_info_remove(&nf_instance->nf_info_list, nf_info);
+        return false;
+    }
+
+    return true;
 }
 
 static void handle_validity_time(
@@ -1086,6 +1244,7 @@ bool ogs_nnrf_nfm_handle_nf_status_notify(
             OpenAPI_notification_event_type_NF_REGISTERED) {
 
         OpenAPI_nf_profile_t *NFProfile = NULL;
+        bool nf_instance_created = false;
 
         NFProfile = NotificationData->nf_profile;
         if (!NFProfile) {
@@ -1136,6 +1295,7 @@ bool ogs_nnrf_nfm_handle_nf_status_notify(
             ogs_sbi_nf_instance_set_id(
                     nf_instance, message.h.resource.component[1]);
             ogs_sbi_nf_fsm_init(nf_instance);
+            nf_instance_created = true;
 
             ogs_info("[%s] (NRF-notify) NF registered", nf_instance->id);
         } else {
@@ -1149,7 +1309,31 @@ bool ogs_nnrf_nfm_handle_nf_status_notify(
             }
         }
 
-        ogs_nnrf_nfm_handle_nf_profile(nf_instance, NFProfile);
+        if (ogs_nnrf_nfm_handle_nf_profile(nf_instance, NFProfile) == false) {
+            ogs_error("[%s] (NRF-notify) Invalid NFProfile [type:%s]",
+                    NFProfile->nf_instance_id,
+                    OpenAPI_nf_type_ToString(NFProfile->nf_type));
+
+            /*
+             * ogs_nnrf_nfm_handle_nf_profile() rebuilds the NF profile in
+             * place. If parsing fails for a newly created cache entry, remove
+             * it because it may contain a partial profile. If the entry
+             * already existed, keep it in the registry to avoid deleting a
+             * previously usable local cache entry because of one bad notify.
+             */
+            if (nf_instance_created == true) {
+                ogs_sbi_nf_fsm_fini(nf_instance);
+                ogs_sbi_nf_instance_remove(nf_instance);
+            }
+
+            ogs_assert(true ==
+                ogs_sbi_server_send_error(
+                    stream, OGS_SBI_HTTP_STATUS_BAD_REQUEST,
+                    recvmsg, "Invalid NFProfile",
+                    NFProfile->nf_instance_id, NULL));
+            ogs_sbi_header_free(&header);
+            return false;
+        }
 
         ogs_info("[%s] (NRF-notify) NF Profile updated [type:%s]",
                     nf_instance->id,
@@ -1216,6 +1400,7 @@ void ogs_nnrf_disc_handle_nf_discover_search_result(
 
     OpenAPI_list_for_each(SearchResult->nf_instances, node) {
         OpenAPI_nf_profile_t *NFProfile = NULL;
+        bool nf_instance_created = false;
 
         if (!node->data) continue;
 
@@ -1248,23 +1433,42 @@ void ogs_nnrf_disc_handle_nf_discover_search_result(
 
             ogs_sbi_nf_instance_set_id(nf_instance, NFProfile->nf_instance_id);
             ogs_sbi_nf_fsm_init(nf_instance);
+            nf_instance_created = true;
 
             ogs_info("[%s] (NRF-discover) NF registered [type:%s]",
-                    nf_instance->id,
-                    OpenAPI_nf_type_ToString(nf_instance->nf_type));
+                    NFProfile->nf_instance_id,
+                    OpenAPI_nf_type_ToString(NFProfile->nf_type));
         } else {
             ogs_warn("[%s] (NRF-discover) NF has already been added [type:%s]",
-                    nf_instance->id,
-                    OpenAPI_nf_type_ToString(nf_instance->nf_type));
+                    NFProfile->nf_instance_id,
+                    OpenAPI_nf_type_ToString(NFProfile->nf_type));
             if (!OGS_FSM_CHECK(&nf_instance->sm, ogs_sbi_nf_state_registered)) {
                 ogs_error("[%s] (NRF-notify) NF invalid state [type:%s]",
-                        nf_instance->id,
-                        OpenAPI_nf_type_ToString(nf_instance->nf_type));
+                        NFProfile->nf_instance_id,
+                        OpenAPI_nf_type_ToString(NFProfile->nf_type));
             }
         }
 
         if (NF_INSTANCE_ID_IS_OTHERS(nf_instance->id)) {
-            ogs_nnrf_nfm_handle_nf_profile(nf_instance, NFProfile);
+            if (ogs_nnrf_nfm_handle_nf_profile(
+                        nf_instance, NFProfile) == false) {
+                ogs_error("[%s] (NRF-discover) Invalid NFProfile [type:%s]",
+                        NFProfile->nf_instance_id,
+                        OpenAPI_nf_type_ToString(NFProfile->nf_type));
+
+                /*
+                 * Do not leave a newly created partial NFProfile in the
+                 * registry. If the entry already existed, keep it to avoid
+                 * deleting a previously usable local cache entry because of
+                 * one bad discovery result.
+                 */
+                if (nf_instance_created == true) {
+                    ogs_sbi_nf_fsm_fini(nf_instance);
+                    ogs_sbi_nf_instance_remove(nf_instance);
+                }
+
+                continue;
+            }
 
             ogs_sbi_client_associate(nf_instance);
 
@@ -1289,15 +1493,15 @@ void ogs_nnrf_disc_handle_nf_discover_search_result(
             } else
                 ogs_warn("[%s] NF Instance validity-time should not 0 "
                         "[type:%s]",
-                    nf_instance->id,
+                    NFProfile->nf_instance_id,
                     nf_instance->nf_type ?
-                        OpenAPI_nf_type_ToString(nf_instance->nf_type) :
+                        OpenAPI_nf_type_ToString(NFProfile->nf_type) :
                         "NULL");
 
             ogs_info("[%s] (NF-discover) NF Profile updated "
                     "[type:%s validity:%ds]",
-                    nf_instance->id,
-                    OpenAPI_nf_type_ToString(nf_instance->nf_type),
+                    NFProfile->nf_instance_id,
+                    OpenAPI_nf_type_ToString(NFProfile->nf_type),
                     nf_instance->time.validity_duration);
         }
     }

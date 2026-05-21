@@ -6,6 +6,10 @@ permalink: /docs/
 head_inline: "<style> ul { padding-bottom: 1em; } </style>"
 ---
 
+- Featured Community Projects
+  - [Open5GS Network Management System (NMS)](https://github.com/paulmataruso/open5gs-nms) - Web UI for Open5GS: config, subscribers, monitoring, and topology in one place
+  - [Docker Open5GS](https://github.com/herlesupreeth/docker_open5gs) - One-command Docker setup for a full 4G/5G Open5GS stack (Core, IMS, RAN, UE).
+
 - User's Guide
   - [Quickstart](guide/01-quickstart)
   - [Building Open5GS from Sources](guide/02-building-open5gs-from-sources)
@@ -72,7 +76,8 @@ head_inline: "<style> ul { padding-bottom: 1em; } </style>"
   - [Select UPF based on S-NSSAI](https://github.com/s5uishida/open5gs_5gc_ueransim_snssai_upf_sample_config)
   - [SCP Indirect communication Model C](https://github.com/s5uishida/open5gs_5gc_ueransim_scp_model_c_sample_config)
   - [Monitoring Metrics with Prometheus](https://github.com/s5uishida/open5gs_5gc_ueransim_metrics_sample_config)
-  - [Frame Routing](https://github.com/s5uishida/open5gs_5gc_ueransim_framed_routing_sample_config)
+  - [Frame Routing with Open5GS UPF](https://github.com/s5uishida/open5gs_5gc_ueransim_framed_routing_sample_config)
+  - [Frame Routing with OAI-CN5G-UPF](https://github.com/s5uishida/open5gs_5gc_ueransim_oai_upf_framed_routing_sample_config)
   - [VPP-UPF with DPDK](https://github.com/s5uishida/open5gs_5gc_ueransim_vpp_upf_dpdk_sample_config)
   - [UERANSIM with eUPF(eBPF/XDP UPF)](https://github.com/s5uishida/open5gs_5gc_ueransim_eupf_sample_config)
   - [srsRAN with eUPF(eBPF/XDP UPF)](https://github.com/s5uishida/open5gs_epc_srsran_eupf_sample_config)

@@ -215,6 +215,8 @@ static int mme_context_prepare(void)
     self.diam_config->cnf_port = DIAMETER_PORT;
     self.diam_config->cnf_port_tls = DIAMETER_SECURE_PORT;
 
+    /* Set the default T3396 to 12 minutes */
+    self.time.t3396.value = 720;
     /* Set the default T3412 to 9 minutes for backward compatibility. */
     self.time.t3412.value = 540;
 
@@ -297,12 +299,20 @@ static int mme_context_validation(void)
                 ogs_app()->file);
         return OGS_ERROR;
     }
-    if (ogs_nas_gprs_timer_from_sec(&gprs_timer, self.time.t3402.value) !=
+    if (self.time.t3402.value && /* Optional */
+        ogs_nas_gprs_timer_from_sec(&gprs_timer, self.time.t3402.value) !=
         OGS_OK) {
         ogs_error("Not support GPRS Timer [%d]", (int)self.time.t3402.value);
         return OGS_ERROR;
     }
-    if (!self.time.t3412.value) {
+    if (self.time.t3396.value && /* Optional */
+        ogs_nas_gprs_timer_3_from_sec(&gprs_timer, self.time.t3396.value) !=
+        OGS_OK) {
+        ogs_error("Not support GPRS Timer 3 [%d]",
+                (int)self.time.t3396.value);
+        return OGS_ERROR;
+    }
+    if (!self.time.t3412.value) { /* Mandatory */
         ogs_error("No mme.time.t3412.value in '%s'",
                 ogs_app()->file);
         return OGS_ERROR;
@@ -312,7 +322,8 @@ static int mme_context_validation(void)
         ogs_error("Not support GPRS Timer [%d]", (int)self.time.t3412.value);
         return OGS_ERROR;
     }
-    if (ogs_nas_gprs_timer_from_sec(&gprs_timer, self.time.t3423.value) !=
+    if (self.time.t3423.value && /* Optional */
+        ogs_nas_gprs_timer_from_sec(&gprs_timer, self.time.t3423.value) !=
         OGS_OK) {
         ogs_error("Not support GPRS Timer [%d]", (int)self.time.t3423.value);
         return OGS_ERROR;
@@ -2488,6 +2499,22 @@ int mme_context_parse_config(void)
                                 } else
                                     ogs_warn("unknown key `%s`", t3402_key);
                             }
+                        } else if (!strcmp(time_key, "t3396")) {
+                            ogs_yaml_iter_t t3396_iter;
+                            ogs_yaml_iter_recurse(&time_iter, &t3396_iter);
+
+                            while (ogs_yaml_iter_next(&t3396_iter)) {
+                                const char *t3396_key =
+                                    ogs_yaml_iter_key(&t3396_iter);
+                                ogs_assert(t3396_key);
+
+                                if (!strcmp(t3396_key, "value")) {
+                                    const char *v = ogs_yaml_iter_value(&t3396_iter);
+                                    if (v)
+                                        self.time.t3396.value = atoll(v);
+                                } else
+                                    ogs_warn("unknown key `%s`", t3396_key);
+                            }
                         } else if (!strcmp(time_key, "t3412")) {
                             ogs_yaml_iter_t t3412_iter;
                             ogs_yaml_iter_recurse(&time_iter, &t3412_iter);
@@ -3695,8 +3722,6 @@ mme_ue_t *mme_ue_add(enb_ue_t *enb_ue)
     }
     mme_ue->gn.gtp_xact_id = OGS_INVALID_POOL_ID;
 
-    mme_ebi_pool_init(mme_ue);
-
     ogs_list_init(&mme_ue->sess_list);
 
     /* Set MME-S11-TEID */
@@ -3807,8 +3832,6 @@ void mme_ue_remove(mme_ue_t *mme_ue)
 
     mme_sess_remove_all(mme_ue);
     mme_session_remove_all(mme_ue);
-
-    mme_ebi_pool_final(mme_ue);
 
     ogs_pool_free(&mme_s11_teid_pool, mme_ue->mme_s11_teid_node);
     ogs_pool_free(&mme_gn_teid_pool, mme_ue->gn.mme_gn_teid_node);
@@ -4077,6 +4100,25 @@ int mme_ue_set_imsi(mme_ue_t *mme_ue, char *imsi_bcd)
     sgw_ue_t *sgw_ue = NULL, *old_sgw_ue = NULL;
     ogs_assert(mme_ue && imsi_bcd);
 
+    /*
+     * Issues: #4357
+     *
+     * Remove the old IMSI hash entry BEFORE overwriting mme_ue->imsi.
+     *
+     * Previously, the hash removal at the end of this function used
+     * mme_ue->imsi AFTER it had already been overwritten with the new IMSI,
+     * so the OLD IMSI entry was never actually removed from the hash table.
+     *
+     * This caused a dangling pointer: the old IMSI key still pointed to
+     * this mme_ue_t, and after mme_ue_remove() freed the object (with
+     * mme_ue_fsm_fini()), a subsequent lookup by the old IMSI would return
+     * a context with an invalid FSM state, leading to ogs_assert_if_reached()
+     * in mme_state_operational().
+     */
+    if (mme_ue->imsi_len != 0)
+        ogs_hash_set(mme_self()->imsi_ue_hash,
+                mme_ue->imsi, mme_ue->imsi_len, NULL);
+
     ogs_cpystrn(mme_ue->imsi_bcd, imsi_bcd, OGS_MAX_IMSI_BCD_LEN+1);
     ogs_bcd_to_buffer(mme_ue->imsi_bcd, mme_ue->imsi, &mme_ue->imsi_len);
 
@@ -4120,10 +4162,12 @@ int mme_ue_set_imsi(mme_ue_t *mme_ue, char *imsi_bcd)
                 ogs_list_for_each(&old_sess->bearer_list, old_bearer) {
                     old_bearer->mme_ue_id = mme_ue->id;
 
-                    if (old_bearer->ebi_node)
-                        ogs_pool_free(
-                                &old_mme_ue->ebi_pool, old_bearer->ebi_node);
-                    old_bearer->ebi_node = NULL;
+                    if (mme_ebi_reserve(mme_ue, old_bearer->ebi) == OGS_OK)
+                        ogs_info("Bearer reserved (EBI=%d IMSI=%s)",
+                                old_bearer->ebi, mme_ue->imsi_bcd);
+                    else
+                        ogs_error("Failed to reserve bearer (EBI=%d IMSI=%s)",
+                                old_bearer->ebi, mme_ue->imsi_bcd);
                 }
                 old_sess->mme_ue_id = mme_ue->id;
             }
@@ -4146,10 +4190,8 @@ int mme_ue_set_imsi(mme_ue_t *mme_ue, char *imsi_bcd)
         }
     }
 
-    if (mme_ue->imsi_len != 0)
-        ogs_hash_set(mme_self()->imsi_ue_hash,
-                mme_ue->imsi, mme_ue->imsi_len, NULL);
-
+    /* Register new IMSI in hash.
+     * Old IMSI hash entry was already removed at the top of this function. */
     ogs_hash_set(self.imsi_ue_hash, mme_ue->imsi, mme_ue->imsi_len, mme_ue);
 
     mme_ue->hssmap = mme_hssmap_find_by_imsi_bcd(mme_ue->imsi_bcd);
@@ -4577,13 +4619,19 @@ mme_bearer_t *mme_bearer_add(mme_sess_t *sess)
 
     ogs_list_init(&bearer->update.xact_list);
 
-    ogs_pool_alloc(&mme_ue->ebi_pool, &bearer->ebi_node);
-    ogs_assert(bearer->ebi_node);
+    /*
+     * Allocate a new EBI from the UE bitmap.
+     * If all EBIs are exhausted, reject bearer creation.
+     */
+    bearer->ebi = mme_ebi_alloc(mme_ue);
+    if (bearer->ebi == INVALID_EPS_BEARER_ID) {
+        ogs_error("Bearer add failed: EBI pool exhausted (IMSI=%s)",
+                mme_ue->imsi_bcd);
+        ogs_pool_free(&mme_bearer_pool, bearer);
+        return NULL;
+    }
 
-    bearer->ebi = *(bearer->ebi_node);
-
-    ogs_assert(bearer->ebi >= MIN_EPS_BEARER_ID &&
-                bearer->ebi <= MAX_EPS_BEARER_ID);
+    ogs_info("Bearer added (EBI=%d IMSI=%s)", bearer->ebi, mme_ue->imsi_bcd);
 
     bearer->mme_ue_id = mme_ue->id;
     bearer->sess_id = sess->id;
@@ -4615,6 +4663,8 @@ void mme_bearer_remove(mme_bearer_t *bearer)
     sess = mme_sess_find_by_id(bearer->sess_id);
     ogs_assert(sess);
 
+    ogs_info("Bearer removed (EBI=%d IMSI=%s)", bearer->ebi, mme_ue->imsi_bcd);
+
     memset(&e, 0, sizeof(e));
     e.bearer_id = bearer->id;
     ogs_fsm_fini(&bearer->sm, &e);
@@ -4626,8 +4676,7 @@ void mme_bearer_remove(mme_bearer_t *bearer)
 
     OGS_TLV_CLEAR_DATA(&bearer->tft);
 
-    if (bearer->ebi_node)
-        ogs_pool_free(&mme_ue->ebi_pool, bearer->ebi_node);
+    ogs_expect(OGS_OK == mme_ebi_free(mme_ue, bearer->ebi));
 
     ogs_list_for_each_entry_safe(&bearer->update.xact_list,
             next_xact, xact, to_update_node) {
@@ -5011,7 +5060,7 @@ int mme_find_served_tai(ogs_eps_tai_t *tai)
             ogs_assert(list1->tai[j].type == OGS_TAI1_TYPE);
             ogs_assert(list1->tai[j].num <= OGS_MAX_NUM_OF_TAI);
 
-            if (memcmp(&list0->tai[j].plmn_id,
+            if (memcmp(&list1->tai[j].plmn_id,
                         &tai->plmn_id, OGS_PLMN_ID_LEN) == 0 &&
                     list1->tai[j].tac <= tai->tac &&
                     tai->tac < (list1->tai[j].tac+list1->tai[j].num))
@@ -5118,36 +5167,73 @@ int mme_m_tmsi_free(mme_m_tmsi_t *m_tmsi)
     return OGS_OK;
 }
 
-void mme_ebi_pool_init(mme_ue_t *mme_ue)
+/*
+ * EPS Bearer ID (EBI) management
+ *
+ * In EPC, valid EBIs are in range [5..15].
+ * Each UE can have at most 11 bearers.
+ *
+ * We track EBI usage with a bitmap rather than ogs_pool nodes,
+ * because bearer contexts may migrate between MME-UE objects
+ * during UE context relocation (OLD UE -> NEW UE).
+ *
+ * Bitmap-based tracking avoids ownership issues with pool-internal
+ * pointers (ebi_node) and supports safe EBI reservation.
+ */
+uint8_t mme_ebi_alloc(mme_ue_t *mme_ue)
 {
-    int i, index;
+    uint8_t ebi;
 
     ogs_assert(mme_ue);
 
-    ogs_pool_create(&mme_ue->ebi_pool, MAX_EPS_BEARER_ID-MIN_EPS_BEARER_ID+1);
+    for (ebi = MIN_EPS_BEARER_ID; ebi <= MAX_EPS_BEARER_ID; ebi++) {
 
-    for (i = MIN_EPS_BEARER_ID, index = 0;
-            i <= MAX_EPS_BEARER_ID; i++, index++) {
-        mme_ue->ebi_pool.array[index] = i;
+        if (!(mme_ue->ebi_bitmap & (1 << ebi))) {
+            mme_ue->ebi_bitmap |= (1 << ebi);
+            ogs_debug("EBI allocated [%d]", ebi);
+            return ebi;
+        }
     }
+
+    ogs_error("No available EBI (range %d-%d)",
+            MIN_EPS_BEARER_ID, MAX_EPS_BEARER_ID);
+
+    return INVALID_EPS_BEARER_ID; /* no available EBI */
 }
 
-void mme_ebi_pool_final(mme_ue_t *mme_ue)
+int mme_ebi_free(mme_ue_t *mme_ue, int ebi)
 {
     ogs_assert(mme_ue);
 
-    ogs_pool_destroy(&mme_ue->ebi_pool);
+    if (ebi < MIN_EPS_BEARER_ID || ebi > MAX_EPS_BEARER_ID) {
+        ogs_error("Invalid EBI to free [%d]", ebi);
+        return OGS_ERROR;
+    }
+
+    mme_ue->ebi_bitmap &= ~(1 << ebi);
+
+    ogs_debug("EBI freed [%d]", ebi);
+
+    return OGS_OK;
 }
 
-void mme_ebi_pool_clear(mme_ue_t *mme_ue)
+int mme_ebi_reserve(mme_ue_t *mme_ue, int ebi)
 {
     ogs_assert(mme_ue);
 
-    /* Suppress log message (mme_ue->ebi_pool.avail != mme_ue->ebi_pool.size) */
-    mme_ue->ebi_pool.avail = mme_ue->ebi_pool.size;
+    if (ebi < MIN_EPS_BEARER_ID || ebi > MAX_EPS_BEARER_ID) {
+        ogs_error("Invalid EBI to reserve [%d]", ebi);
+        return OGS_ERROR;
+    }
 
-    mme_ebi_pool_final(mme_ue);
-    mme_ebi_pool_init(mme_ue);
+    if (mme_ue->ebi_bitmap & (1 << ebi)) {
+        ogs_error("EBI [%d] already reserved", ebi);
+        return OGS_ERROR;
+    }
+
+    mme_ue->ebi_bitmap |= (1 << ebi);
+    ogs_debug("EBI reserved [%d]", ebi);
+    return OGS_OK;
 }
 
 uint8_t mme_selected_int_algorithm(mme_ue_t *mme_ue)

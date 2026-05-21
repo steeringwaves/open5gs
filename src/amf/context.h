@@ -141,6 +141,7 @@ typedef struct amf_gnb_s {
 
     bool            gnb_id_presence;
     uint32_t        gnb_id;     /* gNB_ID received from gNB */
+    uint8_t         gnb_id_length; /* gNB-ID BIT STRING length(22..32) */
     ogs_plmn_id_t   plmn_id;    /* gNB PLMN-ID received from gNB */
     ogs_sctp_sock_t sctp;       /* SCTP socket */
 
@@ -178,6 +179,7 @@ struct ran_ue_s {
     /* UE identity */
 #define INVALID_UE_NGAP_ID 0xffffffffffffffffULL /* Initial value of ran_ue_ngap_id */
     uint64_t        ran_ue_ngap_id; /* RAN-UE-NGAP-ID received from RAN */
+#define MAX_AMF_UE_NGAP_ID 0xffffffffffULL
     uint64_t        amf_ue_ngap_id; /* AMF-UE-NGAP-ID received from AMF */
 
     uint16_t        gnb_ostream_id; /* SCTP output stream id for eNB */
@@ -204,6 +206,7 @@ struct ran_ue_s {
     struct {
         ogs_5gs_tai_t   nr_tai;
         ogs_nr_cgi_t    nr_cgi;
+        uint8_t         nr_cgi_gnb_id_length;
     } saved;
 
     /* NG Holding timer for removing this context */
@@ -362,6 +365,7 @@ struct amf_ue_s {
     uint16_t        gnb_ostream_id;
     ogs_5gs_tai_t   nr_tai;
     ogs_nr_cgi_t    nr_cgi;
+    uint8_t         nr_cgi_gnb_id_length;
     ogs_time_t      ue_location_timestamp;
     ogs_plmn_id_t   last_visited_plmn_id;
     ogs_nas_ue_usage_setting_t ue_usage_setting;
@@ -428,6 +432,9 @@ struct amf_ue_s {
     int             security_context_available;
     int             mac_failed;
 
+    /* Authentication synch failure counter */
+    uint8_t auth_synch_fail_count;
+
     /* flag: 1 = allow restoration of context, 0 = disallow */
     bool            can_restore_context;
 
@@ -437,6 +444,9 @@ struct amf_ue_s {
     /* Security Context */
     ogs_nas_ue_security_capability_t ue_security_capability;
     ogs_nas_ue_network_capability_t ue_network_capability;
+
+    /* Transient Path Switch state */
+    bool send_ue_security_capability_in_path_switch_ack;
 #define CHECK_5G_AKA_CONFIRMATION(__aMF) \
     ((__aMF) && ((__aMF)->confirmation_for_5g_aka.resource_uri))
 #define STORE_5G_AKA_CONFIRMATION(__aMF, __rESOURCE_URI) \
@@ -913,25 +923,31 @@ typedef struct amf_sess_s {
     ogs_pool_id_t   amf_ue_id;
 
     /*
-     * RAN-UE identifier associated with this session.
+     * RAN-UE identifier currently associated with this session.
+     *
+     * NOTE:
+     * This field represents the latest RAN UE NGAP ID known for the session.
+     * It may change during procedures such as NG context release and
+     * re-establishment.
      *
      * IMPORTANT:
      * - During SBI Client operations (e.g., AMF sending requests to SMF/PCF),
-     *   the RAN-UE may change before the asynchronous SBI response arrives
-     *   (e.g., NG Context release/re-establishment). Because of this, the
-     *   SBI transaction (ogs_sbi_xact_t) stores its own snapshot of the
-     *   RAN-UE ID inside xact->assoc_id[].
+     *   the RAN-UE may change before the asynchronous SBI response arrives.
+     *   To avoid using a stale or incorrect RAN-UE, the SBI transaction
+     *   (ogs_sbi_xact_t) stores a snapshot in xact->user_data.
      *
-     *   When processing SBI Client responses, the AMF must use the snapshot
-     *   stored in xact->assoc_id[AMF_ASSOC_RAN_UE_ID] instead of
-     *   this session field.
+     *   When handling SBI Client responses, the AMF MUST use the snapshot
+     *   stored in the SBI transaction instead of this session field.
      *
      * - For SBI Server operations (e.g., Namf callbacks where the AMF
      *   receives requests from SMF), there is no transaction-specific
      *   snapshot. In such cases, the current session value (sess->ran_ue_id)
      *   is used.
+     *
+     * This design helps prevent RAN-UE mismatches observed in Issue #2839,
+     * where concurrent UE procedures could result in NAS being sent to the
+     * wrong RAN UE.
      */
-#define AMF_ASSOC_RAN_UE_ID 1
     ogs_pool_id_t   ran_ue_id;
 
     ogs_s_nssai_t s_nssai;
@@ -954,7 +970,7 @@ void amf_gnb_remove(amf_gnb_t *gnb);
 void amf_gnb_remove_all(void);
 amf_gnb_t *amf_gnb_find_by_addr(ogs_sockaddr_t *addr);
 amf_gnb_t *amf_gnb_find_by_gnb_id(uint32_t gnb_id);
-int amf_gnb_set_gnb_id(amf_gnb_t *gnb, uint32_t gnb_id);
+int amf_gnb_set_gnb_id(amf_gnb_t *gnb, uint32_t gnb_id, uint8_t gnb_id_length);
 int amf_gnb_sock_type(ogs_sock_t *sock);
 amf_gnb_t *amf_gnb_find_by_id(ogs_pool_id_t id);
 
