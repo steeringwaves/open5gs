@@ -4,6 +4,16 @@ Docker running example
   
   `$ docker compose run dev`
 
+* Redis-only build (no MongoDB / libmongoc — e.g. Raspberry Pi)
+
+  Builds Open5GS with `-Dmongo=disabled -Dredis=enabled` and the
+  `open5gs-dbctl-redis` provisioning CLI. See
+  `docs/_docs/guide/redis-backend.md`.
+
+  ```
+  $ docker build -f docker/ubuntu/latest/redis/Dockerfile -t open5gs-redis .
+  ```
+
 * Run WebUI
   
   `$ docker-compose up webui`
