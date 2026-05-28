@@ -20,6 +20,7 @@ libdbi_sources = files('''
 
     ogs-mongoc.h
 
+    ogs-dbi-core.c
     ogs-mongoc.c
     subscription.c
     session.c

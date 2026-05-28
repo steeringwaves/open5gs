@@ -21,8 +21,6 @@
 
 #include "ogs-dbi.h"
 
-int __ogs_dbi_domain;
-
 static ogs_mongoc_t self;
 
 /*
