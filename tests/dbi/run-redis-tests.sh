@@ -80,6 +80,14 @@ if [ "$ready" -ne 1 ]; then
     exit 1
 fi
 
+# Enable keyspace notifications explicitly so the watcher's keyspace fallback
+# fires deterministically for the live watcher test. The backend also tries this
+# at watch_init (best-effort), but setting it here removes any doubt.
+#   K = keyspace events, g = generic commands (DEL/EXPIRE/...), $ = string ops
+#       (SET lives here), so the test's SET produces a __keyspace@..__ event.
+echo "run-redis-tests: enabling keyspace notifications (notify-keyspace-events Kg\$)"
+docker exec "$cid" redis-cli CONFIG SET notify-keyspace-events 'Kg$' >/dev/null
+
 # Provision the canonical subscriber JSON and the MSISDN secondary index.
 # The JSON value must match what redis-equivalence-test.c asserts (sqn 96 etc.).
 echo "run-redis-tests: provisioning fixture (subscriber + msisdn index)"

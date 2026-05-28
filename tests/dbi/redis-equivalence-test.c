@@ -36,6 +36,15 @@
 
 #define OGS_DBI_COMPILATION
 #include "ogs-dbi.h"
+#include "ogs-dbi-backend.h"
+/*
+ * The watcher integration test below opens a SECOND hiredis connection (the
+ * subscriber connection is owned by the backend) to drive SET/PUBLISH from the
+ * "client" side, and reuses the non-static redis_parse_uri to recover the
+ * host/port/prefix from OGS_TEST_REDIS_URI. Both come from the redis backend
+ * internal header, which also pulls in <hiredis.h>.
+ */
+#include "redis/redis-internal.h"
 #include "core/abts.h"
 
 #define EQ_SUPI "imsi-001010000000001"
@@ -143,10 +152,187 @@ static void equivalence_roundtrip(abts_case *tc, void *data)
     ogs_dbi_final();
 }
 
+/*
+ * ---------------------------------------------------------------------------
+ * Live change-notification watcher test (Docker-gated).
+ *
+ * Proves the Redis watcher delivers BOTH channels through the Phase-1 neutral
+ * callback (the same callback HSS registers):
+ *   - keyspace fallback: a third-party `SET <prefix>subscriber:<imsi>` produces
+ *     an OGS_DBI_FIELD_ALL change event for that IMSI.
+ *   - rich channel: a `PUBLISH <prefix>events:subscriber {"imsi":...,
+ *     "fields":["ambr","slice"]}` produces a precise (AMBR|SLICE) change event.
+ *
+ * The SET/PUBLISH are issued from a SECOND hiredis connection (the backend's
+ * sub_ctx is subscriber-only and can't issue regular commands), connecting to
+ * the same host/port recovered by re-parsing OGS_TEST_REDIS_URI.
+ * ---------------------------------------------------------------------------
+ */
+
+/* Minimal but valid subscriber JSON for the keyspace SET (value is not parsed
+ * by the watcher; only the keyspace 'set' event matters). */
+#define WATCH_SET_JSON "{\"imsi\":\"" EQ_IMSI "\"}"
+/* Rich event payload: precise field list -> (AMBR|SLICE). */
+#define WATCH_RICH_JSON \
+    "{\"imsi\":\"" EQ_IMSI "\",\"fields\":[\"ambr\",\"slice\"]}"
+
+static struct {
+    char imsi[OGS_MAX_IMSI_BCD_LEN + 1];
+    uint32_t mask;
+    int count;
+} g_captured;
+
+static void capture_cb(ogs_dbi_change_event_t *event, void *data)
+{
+    if (event && event->imsi_bcd) {
+        ogs_cpystrn(g_captured.imsi, event->imsi_bcd, sizeof(g_captured.imsi));
+        g_captured.mask = event->updated_fields_mask;
+        g_captured.count++;
+    }
+    ogs_dbi_change_event_free(event);   /* handler owns the event */
+}
+
+static void capture_reset(void)
+{
+    memset(&g_captured, 0, sizeof(g_captured));
+}
+
+/* Pump the watcher poll up to `max` ticks, stopping as soon as an event has
+ * been captured. Always poll at least once. */
+static void poll_until_captured(int max)
+{
+    int i;
+    for (i = 0; i < max; i++) {
+        ogs_dbi_poll_change_stream();
+        if (g_captured.count > 0)
+            break;
+        ogs_msleep(50);
+    }
+}
+
+static void watch_keyspace_and_rich(abts_case *tc, void *data)
+{
+    const char *uri = getenv("OGS_TEST_REDIS_URI");
+    char *host = NULL, *prefix = NULL;
+    int port = 0;
+    redisContext *c2 = NULL;
+    redisReply *reply;
+    int rv, i;
+
+    if (!uri || uri[0] == '\0') {
+        ogs_info("redis watcher test skipped: "
+                "set OGS_TEST_REDIS_URI to run");
+        ABTS_TRUE(tc, 1);
+        return;
+    }
+
+    ogs_info("redis watcher test running against %s", uri);
+
+    /* Recover host/port/prefix for the second (client) connection. */
+    rv = redis_parse_uri(uri, &host, &port, &prefix);
+    ABTS_INT_EQUAL(tc, OGS_OK, rv);
+    if (rv != OGS_OK)
+        return;
+    ABTS_PTR_NOTNULL(tc, host);
+    ABTS_PTR_NOTNULL(tc, prefix);
+    ogs_info("redis watcher: host=%s port=%d prefix=%s", host, port, prefix);
+
+    rv = ogs_dbi_init(uri);
+    ABTS_INT_EQUAL(tc, OGS_OK, rv);
+    if (rv != OGS_OK) {
+        ogs_error("ogs_dbi_init(%s) failed; is Redis reachable?", uri);
+        ogs_free(host);
+        ogs_free(prefix);
+        return;
+    }
+
+    ogs_dbi_set_change_handler(capture_cb, NULL);
+
+    rv = ogs_dbi_collection_watch_init();
+    ABTS_INT_EQUAL(tc, OGS_OK, rv);
+    if (rv != OGS_OK) {
+        ogs_error("ogs_dbi_collection_watch_init() failed");
+        ogs_dbi_final();
+        ogs_dbi_set_change_handler(NULL, NULL);
+        ogs_free(host);
+        ogs_free(prefix);
+        return;
+    }
+
+    /* Pump a few times to consume the SUBSCRIBE/PSUBSCRIBE confirmations and
+     * let the server register the subscriptions before we publish. */
+    for (i = 0; i < 5; i++) {
+        ogs_dbi_poll_change_stream();
+        ogs_msleep(50);
+    }
+
+    /* Second connection (client side) for SET/PUBLISH. */
+    c2 = redisConnect(host, port);
+    ABTS_PTR_NOTNULL(tc, c2);
+    if (!c2 || c2->err) {
+        ogs_error("redis watcher: second connection failed: %s",
+                c2 ? c2->errstr : "alloc");
+        ABTS_TRUE(tc, 0);
+        if (c2) redisFree(c2);
+        ogs_dbi_final();
+        ogs_dbi_set_change_handler(NULL, NULL);
+        ogs_free(host);
+        ogs_free(prefix);
+        return;
+    }
+
+    /*
+     * Keyspace path: SET <prefix>subscriber:<imsi> -> keyspace 'set' event ->
+     * OGS_DBI_FIELD_ALL.
+     */
+    capture_reset();
+    reply = redisCommand(c2, "SET %ssubscriber:%s %s",
+            prefix, EQ_IMSI, WATCH_SET_JSON);
+    ABTS_PTR_NOTNULL(tc, reply);
+    if (reply) freeReplyObject(reply);
+
+    poll_until_captured(20);
+
+    ABTS_TRUE(tc, g_captured.count > 0);
+    ABTS_STR_EQUAL(tc, EQ_IMSI, g_captured.imsi);
+    ABTS_INT_EQUAL(tc, (int)OGS_DBI_FIELD_ALL, (int)g_captured.mask);
+    ogs_info("redis watcher: keyspace event captured "
+            "(imsi=%s mask=0x%x count=%d)",
+            g_captured.imsi, g_captured.mask, g_captured.count);
+
+    /*
+     * Rich path: PUBLISH <prefix>events:subscriber {...fields...} ->
+     * precise (AMBR|SLICE) mask.
+     */
+    capture_reset();
+    reply = redisCommand(c2, "PUBLISH %sevents:subscriber %s",
+            prefix, WATCH_RICH_JSON);
+    ABTS_PTR_NOTNULL(tc, reply);
+    if (reply) freeReplyObject(reply);
+
+    poll_until_captured(20);
+
+    ABTS_TRUE(tc, g_captured.count > 0);
+    ABTS_STR_EQUAL(tc, EQ_IMSI, g_captured.imsi);
+    ABTS_INT_EQUAL(tc,
+            (int)(OGS_DBI_FIELD_AMBR | OGS_DBI_FIELD_SLICE),
+            (int)g_captured.mask);
+    ogs_info("redis watcher: rich event captured "
+            "(imsi=%s mask=0x%x count=%d)",
+            g_captured.imsi, g_captured.mask, g_captured.count);
+
+    redisFree(c2);
+    ogs_dbi_final();
+    ogs_dbi_set_change_handler(NULL, NULL);
+    ogs_free(host);
+    ogs_free(prefix);
+}
+
 abts_suite *test_redis_equivalence(abts_suite *suite);
 abts_suite *test_redis_equivalence(abts_suite *suite)
 {
     suite = ADD_SUITE(suite);
     abts_run_test(suite, equivalence_roundtrip, NULL);
+    abts_run_test(suite, watch_keyspace_and_rich, NULL);
     return suite;
 }
