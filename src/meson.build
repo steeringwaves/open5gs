@@ -52,3 +52,7 @@ subdir('ausf')
 subdir('upf')
 subdir('smf')
 subdir('amf')
+
+if libhiredis_dep.found()
+    subdir('dbctl')
+endif
