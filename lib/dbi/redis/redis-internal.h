@@ -33,6 +33,10 @@ extern "C" {
 #define OGS_REDIS_DEFAULT_PORT 6379
 #define OGS_REDIS_WATCH_MAX_RETRY 5
 
+#define OGS_REDIS_SUPPRESS_SLOTS 16
+#define OGS_REDIS_SUPPRESS_WINDOW ogs_time_from_msec(200)
+#define OGS_REDIS_EVENTS_CHANNEL_SUFFIX "events:subscriber"
+
 typedef struct ogs_redis_s {
     bool initialized;
     char *host;
@@ -40,6 +44,12 @@ typedef struct ogs_redis_s {
     char *prefix;          /* e.g. "open5gs:" */
     char *masked_uri;
     redisContext *ctx;     /* sync connection for GET/SET/WATCH/MULTI */
+    redisContext *sub_ctx; /* dedicated pub/sub connection for watch */
+    struct {
+        char imsi_bcd[OGS_MAX_IMSI_BCD_LEN + 1];
+        ogs_time_t when;
+    } suppress[OGS_REDIS_SUPPRESS_SLOTS];
+    int suppress_next;     /* ring write index */
 } ogs_redis_t;
 
 ogs_redis_t *ogs_redis(void);
@@ -114,6 +124,15 @@ int redis_msisdn_data(char *id, ogs_msisdn_data_t *out);
 int redis_ims_data(char *supi, ogs_ims_data_t *out);
 int redis_watch_init(void);
 int redis_poll_change_stream(void);
+
+/*
+ * Pure change-event helpers (defined in redis-watch.c, Tasks 2-3).
+ * Declared here so redis-backend.c and the unit tests can reference them.
+ */
+uint32_t redis_event_field_from_name(const char *name);
+int redis_parse_rich_event(const char *json, char **imsi_out, uint32_t *mask_out);
+char *redis_keyspace_channel_to_imsi(const char *channel, const char *prefix);
+void redis_watch_process_message(redisReply *reply);
 
 #ifdef __cplusplus
 }

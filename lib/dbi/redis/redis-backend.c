@@ -19,6 +19,9 @@
 
 #include "redis/redis-internal.h"
 
+#include <fcntl.h>
+#include <errno.h>
+
 static ogs_redis_t self;
 
 ogs_redis_t *ogs_redis(void) { return &self; }
@@ -121,6 +124,7 @@ int redis_init(const char *uri)
 
 void redis_final(void)
 {
+    if (self.sub_ctx) { redisFree(self.sub_ctx); self.sub_ctx = NULL; }
     if (self.ctx) { redisFree(self.ctx); self.ctx = NULL; }
     if (self.host) { ogs_free(self.host); self.host = NULL; }
     if (self.prefix) { ogs_free(self.prefix); self.prefix = NULL; }
@@ -264,8 +268,57 @@ const ogs_dbi_backend_t redis_backend = {
 
 int redis_watch_init(void)
 {
-    ogs_warn("Redis change notifications are not implemented yet (Phase 3); "
-             "subscriber edits will not propagate to a running HSS.");
-    return OGS_ERROR;
+    redisReply *reply;
+    int flags;
+
+    if (!ogs_redis()->ctx) {
+        ogs_error("redis_watch_init: backend not connected");
+        return OGS_ERROR;
+    }
+
+    ogs_redis()->sub_ctx = redisConnect(ogs_redis()->host, ogs_redis()->port);
+    if (!ogs_redis()->sub_ctx || ogs_redis()->sub_ctx->err) {
+        ogs_warn("redis_watch_init: failed to open subscriber connection: %s",
+                ogs_redis()->sub_ctx ? ogs_redis()->sub_ctx->errstr : "alloc");
+        if (ogs_redis()->sub_ctx) {
+            redisFree(ogs_redis()->sub_ctx);
+            ogs_redis()->sub_ctx = NULL;
+        }
+        return OGS_ERROR;
+    }
+
+    /* Best-effort enable keyspace notifications (generic + string + key-event).
+     * On managed Redis where CONFIG is disabled this fails — warn, continue. */
+    reply = redisCommand(ogs_redis()->sub_ctx,
+            "CONFIG SET notify-keyspace-events Kg$");
+    if (!reply || reply->type == REDIS_REPLY_ERROR) {
+        ogs_warn("redis: could not enable keyspace notifications "
+                 "(set 'notify-keyspace-events Kg$' in redis.conf); "
+                 "subscriber edits may not propagate to HSS");
+    }
+    if (reply) freeReplyObject(reply);
+
+    /* Rich channel (precise field updates, published by open5gs-dbctl). */
+    reply = redisCommand(ogs_redis()->sub_ctx, "SUBSCRIBE %s%s",
+            ogs_redis()->prefix, OGS_REDIS_EVENTS_CHANNEL_SUFFIX);
+    if (reply) freeReplyObject(reply);
+
+    /* Keyspace fallback for third-party writers. */
+    reply = redisCommand(ogs_redis()->sub_ctx,
+            "PSUBSCRIBE __keyspace@*__:%ssubscriber:*", ogs_redis()->prefix);
+    if (reply) freeReplyObject(reply);
+
+    /* Non-blocking so the HSS poll-timer drain never blocks. */
+    flags = fcntl(ogs_redis()->sub_ctx->fd, F_GETFL, 0);
+    if (flags >= 0)
+        fcntl(ogs_redis()->sub_ctx->fd, F_SETFL, flags | O_NONBLOCK);
+
+    ogs_redis()->suppress_next = 0;
+    memset(ogs_redis()->suppress, 0, sizeof(ogs_redis()->suppress));
+
+    ogs_info("Redis change notifications enabled (rich + keyspace).");
+    return OGS_OK;
 }
-int redis_poll_change_stream(void) { return OGS_ERROR; }
+
+/* Temporary no-op; the real non-blocking drain lands in Task 3. */
+int redis_poll_change_stream(void) { return OGS_OK; }
