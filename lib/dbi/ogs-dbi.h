@@ -74,6 +74,12 @@ extern "C" {
 
 extern int __ogs_dbi_domain;
 
+int ogs_dbi_init(const char *db_uri);
+void ogs_dbi_final(void);
+
+int ogs_dbi_collection_watch_init(void);
+int ogs_dbi_poll_change_stream(void);
+
 #undef OGS_LOG_DOMAIN
 #define OGS_LOG_DOMAIN __ogs_dbi_domain
 

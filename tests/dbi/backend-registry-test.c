@@ -56,17 +56,22 @@ static void reset_stub(void)
     stub_last_uri[0] = '\0';
 }
 
+static void ensure_stub_registered(void)
+{
+    if (!ogs_dbi_backend_find("stub"))
+        ogs_dbi_backend_register(&stub_backend);
+}
+
 static void registry_register_then_find(abts_case *tc, void *data)
 {
-    int rv = ogs_dbi_backend_register(&stub_backend);
-    ABTS_INT_EQUAL(tc, OGS_OK, rv);
-
+    ensure_stub_registered();
     const ogs_dbi_backend_t *found = ogs_dbi_backend_find("stub");
     ABTS_PTR_EQUAL(tc, (void *)&stub_backend, (void *)found);
 }
 
 static void registry_double_register_fails(abts_case *tc, void *data)
 {
+    ensure_stub_registered();
     int rv = ogs_dbi_backend_register(&stub_backend);
     ABTS_INT_EQUAL(tc, OGS_ERROR, rv);
 }
@@ -79,6 +84,7 @@ static void registry_find_unknown_returns_null(abts_case *tc, void *data)
 static void init_dispatches_by_scheme(abts_case *tc, void *data)
 {
     reset_stub();
+    ensure_stub_registered();
 
     int rv = ogs_dbi_init("stub://host:1234/dbname");
     ABTS_INT_EQUAL(tc, OGS_OK, rv);
@@ -103,6 +109,12 @@ static void init_null_uri_returns_error(abts_case *tc, void *data)
     ABTS_INT_EQUAL(tc, OGS_ERROR, rv);
 }
 
+static void init_malformed_uri_returns_error(abts_case *tc, void *data)
+{
+    int rv = ogs_dbi_init("garbage-no-scheme");
+    ABTS_INT_EQUAL(tc, OGS_ERROR, rv);
+}
+
 abts_suite *test_backend_registry(abts_suite *suite);
 
 abts_suite *test_backend_registry(abts_suite *suite)
@@ -114,5 +126,6 @@ abts_suite *test_backend_registry(abts_suite *suite)
     abts_run_test(suite, init_dispatches_by_scheme, NULL);
     abts_run_test(suite, init_unknown_scheme_returns_error, NULL);
     abts_run_test(suite, init_null_uri_returns_error, NULL);
+    abts_run_test(suite, init_malformed_uri_returns_error, NULL);
     return suite;
 }
