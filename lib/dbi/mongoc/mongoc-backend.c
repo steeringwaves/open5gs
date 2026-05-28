@@ -178,28 +178,9 @@ ogs_mongoc_t *ogs_mongoc(void)
 }
 
 /* ---- TEMPORARY STUBS — replaced as later tasks move the real code in.
- * These should never be invoked during Phase 1 because the public
- * ogs_dbi_* functions still call the original implementations directly
- * until Task 10 converts them to dispatchers. ---- */
-int mongoc_auth_info(char *supi, ogs_dbi_auth_info_t *out)
-{ (void)supi; (void)out; ogs_fatal("mongoc_auth_info stub called"); return OGS_ERROR; }
-int mongoc_update_sqn(char *supi, uint64_t sqn)
-{ (void)supi; (void)sqn; ogs_fatal("mongoc_update_sqn stub called"); return OGS_ERROR; }
-int mongoc_increment_sqn(char *supi)
-{ (void)supi; ogs_fatal("mongoc_increment_sqn stub called"); return OGS_ERROR; }
-int mongoc_update_imeisv(char *supi, char *imeisv)
-{ (void)supi; (void)imeisv; ogs_fatal("mongoc_update_imeisv stub called"); return OGS_ERROR; }
-int mongoc_update_mme(char *supi, char *host, char *realm, bool purge)
-{ (void)supi; (void)host; (void)realm; (void)purge; ogs_fatal("mongoc_update_mme stub called"); return OGS_ERROR; }
-int mongoc_subscription_data(char *supi, ogs_subscription_data_t *out)
-{ (void)supi; (void)out; ogs_fatal("mongoc_subscription_data stub called"); return OGS_ERROR; }
-int mongoc_session_data(const char *supi, const ogs_s_nssai_t *s_nssai,
-        const char *dnn, ogs_session_data_t *out)
-{ (void)supi; (void)s_nssai; (void)dnn; (void)out; ogs_fatal("mongoc_session_data stub called"); return OGS_ERROR; }
-int mongoc_msisdn_data(char *id, ogs_msisdn_data_t *out)
-{ (void)id; (void)out; ogs_fatal("mongoc_msisdn_data stub called"); return OGS_ERROR; }
-int mongoc_ims_data(char *supi, ogs_ims_data_t *out)
-{ (void)supi; (void)out; ogs_fatal("mongoc_ims_data stub called"); return OGS_ERROR; }
+ * The read/write implementations now live in mongoc-{subscription,session,
+ * ims}.c. The change-stream watch functions remain stubs until a later
+ * task moves them in. ---- */
 int mongoc_watch_init(void)
 { ogs_fatal("mongoc_watch_init stub called"); return OGS_ERROR; }
 int mongoc_poll_change_stream(void)

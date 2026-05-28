@@ -33,10 +33,11 @@ backend_c_args = []
 libmongoc_dep = dependency('libmongoc-1.0', required: get_option('mongo'))
 if libmongoc_dep.found()
     libdbi_sources += files('''
-        ogs-mongoc.c
-
         mongoc/mongoc-internal.h
         mongoc/mongoc-backend.c
+        mongoc/mongoc-subscription.c
+        mongoc/mongoc-session.c
+        mongoc/mongoc-ims.c
     '''.split())
     backend_deps += libmongoc_dep
     backend_c_args += '-DOGS_DBI_HAVE_MONGOC'
