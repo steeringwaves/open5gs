@@ -295,11 +295,6 @@ int redis_update_mme(char *supi, char *host, char *realm, bool purge)
     ogs_fatal("redis_update_mme not implemented yet");
     return OGS_ERROR;
 }
-int redis_subscription_data(char *supi, ogs_subscription_data_t *out)
-{
-    ogs_fatal("redis_subscription_data not implemented yet");
-    return OGS_ERROR;
-}
 int redis_session_data(const char *supi, const ogs_s_nssai_t *s_nssai,
         const char *dnn, ogs_session_data_t *out)
 {

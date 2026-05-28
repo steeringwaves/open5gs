@@ -71,6 +71,60 @@ static const char SUBSCRIBER_JSON[] =
     "\"subscriber_status\":0"
     "}";
 
+/*
+ * A multi-slice / multi-session subscriber fixture. Two slices; the first slice
+ * carries two sessions. Exercises the slice[] and session[] array loops and the
+ * SD parse path (slice[1] has a non-default sd).
+ */
+static const char SUBSCRIBER_JSON_MULTI[] =
+    "{"
+    "\"imsi\":\"001010000000002\","
+    "\"security\":{"
+        "\"k\":\"465B5CE8B199B49FAA5F0A2EE238A6BC\","
+        "\"opc\":\"E8ED289DEBA952E4283B54E88E6183CA\","
+        "\"amf\":\"8000\","
+        "\"sqn\":128"
+    "},"
+    "\"msisdn\":[\"491725670001\",\"491725670002\"],"
+    "\"ambr\":{"
+        "\"downlink\":{\"value\":1,\"unit\":3},"
+        "\"uplink\":{\"value\":1,\"unit\":3}"
+    "},"
+    "\"slice\":[{"
+        "\"sst\":1,"
+        "\"default_indicator\":true,"
+        "\"session\":[{"
+            "\"name\":\"internet\","
+            "\"type\":3,"
+            "\"qos\":{\"index\":9,\"arp\":{\"priority_level\":8,"
+                "\"pre_emption_capability\":1,\"pre_emption_vulnerability\":1}},"
+            "\"ambr\":{\"downlink\":{\"value\":1,\"unit\":3},"
+                "\"uplink\":{\"value\":1,\"unit\":3}}"
+        "},{"
+            "\"name\":\"ims\","
+            "\"type\":3,"
+            "\"qos\":{\"index\":5,\"arp\":{\"priority_level\":1,"
+                "\"pre_emption_capability\":0,\"pre_emption_vulnerability\":0}},"
+            "\"ambr\":{\"downlink\":{\"value\":1,\"unit\":2},"
+                "\"uplink\":{\"value\":1,\"unit\":2}}"
+        "}]"
+    "},{"
+        "\"sst\":2,"
+        "\"sd\":\"000080\","
+        "\"default_indicator\":false,"
+        "\"session\":[{"
+            "\"name\":\"data\","
+            "\"type\":3,"
+            "\"qos\":{\"index\":9,\"arp\":{\"priority_level\":8,"
+                "\"pre_emption_capability\":1,\"pre_emption_vulnerability\":1}},"
+            "\"ambr\":{\"downlink\":{\"value\":1,\"unit\":3},"
+                "\"uplink\":{\"value\":1,\"unit\":3}}"
+        "}]"
+    "}],"
+    "\"access_restriction_data\":32,"
+    "\"subscriber_status\":0"
+    "}";
+
 static void uri_basic(abts_case *tc, void *data)
 {
     char *host = NULL, *prefix = NULL; int port = 0;
@@ -124,6 +178,94 @@ static void parse_auth_info_ok(abts_case *tc, void *data)
     cJSON_Delete(doc);
 }
 
+static void parse_subscription_data_ok(abts_case *tc, void *data)
+{
+    cJSON *doc = cJSON_Parse(SUBSCRIBER_JSON);
+    ogs_subscription_data_t subscription_data;
+    int rv;
+
+    ABTS_PTR_NOTNULL(tc, doc);
+    rv = redis_parse_subscription_data(doc, &subscription_data);
+    ABTS_INT_EQUAL(tc, OGS_OK, rv);
+
+    /* msisdn[] */
+    ABTS_INT_EQUAL(tc, 1, subscription_data.num_of_msisdn);
+
+    /* UE-AMBR after unit-scaling: value=1, unit=3 -> 1*1000*1000*1000 */
+    ABTS_TRUE(tc, subscription_data.ambr.downlink == 1000000000ULL);
+    ABTS_TRUE(tc, subscription_data.ambr.uplink == 1000000000ULL);
+
+    /* slice[] */
+    ABTS_INT_EQUAL(tc, 1, subscription_data.num_of_slice);
+    ABTS_INT_EQUAL(tc, 1, subscription_data.slice[0].s_nssai.sst);
+    /* No 'sd' in the single fixture -> default no-SD value */
+    ABTS_INT_EQUAL(tc, OGS_S_NSSAI_NO_SD_VALUE,
+            subscription_data.slice[0].s_nssai.sd.v);
+    ABTS_INT_EQUAL(tc, 1, subscription_data.slice[0].default_indicator);
+
+    /* session[] */
+    ABTS_INT_EQUAL(tc, 1, subscription_data.slice[0].num_of_session);
+    ABTS_PTR_NOTNULL(tc, subscription_data.slice[0].session[0].name);
+    ABTS_STR_EQUAL(tc, "internet",
+            subscription_data.slice[0].session[0].name);
+    ABTS_INT_EQUAL(tc, OGS_PDU_SESSION_TYPE_IPV4V6,
+            subscription_data.slice[0].session[0].session_type);
+    ABTS_INT_EQUAL(tc, 9, subscription_data.slice[0].session[0].qos.index);
+    ABTS_INT_EQUAL(tc, 8,
+            subscription_data.slice[0].session[0].qos.arp.priority_level);
+    ABTS_INT_EQUAL(tc, 1,
+            subscription_data.slice[0].session[0].qos.arp.
+                pre_emption_capability);
+    ABTS_INT_EQUAL(tc, 1,
+            subscription_data.slice[0].session[0].qos.arp.
+                pre_emption_vulnerability);
+
+    /* session-AMBR after unit-scaling */
+    ABTS_TRUE(tc,
+            subscription_data.slice[0].session[0].ambr.downlink ==
+                1000000000ULL);
+
+    ABTS_INT_EQUAL(tc, 32, (int)subscription_data.access_restriction_data);
+    ABTS_INT_EQUAL(tc, 0, (int)subscription_data.subscriber_status);
+
+    ogs_subscription_data_free(&subscription_data);
+    cJSON_Delete(doc);
+}
+
+static void parse_subscription_data_multi(abts_case *tc, void *data)
+{
+    cJSON *doc = cJSON_Parse(SUBSCRIBER_JSON_MULTI);
+    ogs_subscription_data_t subscription_data;
+    int rv;
+
+    ABTS_PTR_NOTNULL(tc, doc);
+    rv = redis_parse_subscription_data(doc, &subscription_data);
+    ABTS_INT_EQUAL(tc, OGS_OK, rv);
+
+    ABTS_INT_EQUAL(tc, 2, subscription_data.num_of_msisdn);
+
+    /* Two slices; first carries two sessions, second carries one */
+    ABTS_INT_EQUAL(tc, 2, subscription_data.num_of_slice);
+    ABTS_INT_EQUAL(tc, 2, subscription_data.slice[0].num_of_session);
+    ABTS_INT_EQUAL(tc, 1, subscription_data.slice[1].num_of_session);
+
+    ABTS_INT_EQUAL(tc, 1, subscription_data.slice[0].s_nssai.sst);
+    ABTS_STR_EQUAL(tc, "internet",
+            subscription_data.slice[0].session[0].name);
+    ABTS_STR_EQUAL(tc, "ims",
+            subscription_data.slice[0].session[1].name);
+
+    /* Second slice has an explicit sd ("000080" -> 0x80 == 128) */
+    ABTS_INT_EQUAL(tc, 2, subscription_data.slice[1].s_nssai.sst);
+    ABTS_INT_EQUAL(tc, 0x000080, subscription_data.slice[1].s_nssai.sd.v);
+    ABTS_INT_EQUAL(tc, 0, subscription_data.slice[1].default_indicator);
+    ABTS_STR_EQUAL(tc, "data",
+            subscription_data.slice[1].session[0].name);
+
+    ogs_subscription_data_free(&subscription_data);
+    cJSON_Delete(doc);
+}
+
 abts_suite *test_redis_parse(abts_suite *suite);
 abts_suite *test_redis_parse(abts_suite *suite)
 {
@@ -133,5 +275,7 @@ abts_suite *test_redis_parse(abts_suite *suite)
     abts_run_test(suite, uri_rejects_non_redis, NULL);
     abts_run_test(suite, init_selects_redis_backend, NULL);
     abts_run_test(suite, parse_auth_info_ok, NULL);
+    abts_run_test(suite, parse_subscription_data_ok, NULL);
+    abts_run_test(suite, parse_subscription_data_multi, NULL);
     return suite;
 }
