@@ -67,6 +67,32 @@ char *redis_get_string(const char *key);
 typedef int (*redis_mutate_f)(cJSON *doc, void *data);
 int redis_update_subscriber(const char *supi, redis_mutate_f mutate, void *data);
 
+/*
+ * Argument struct for the MME-update mutate function. Carries the scalar
+ * fields mongoc_update_mme writes ($set mme_host/mme_realm/purge_flag, plus a
+ * server-side mme_timestamp). Kept here so the unit test can build one.
+ */
+typedef struct redis_mme_arg_s {
+    const char *host;
+    const char *realm;
+    bool purge;
+} redis_mme_arg_t;
+
+/*
+ * Pure mutate functions for the WATCH/MULTI writers. Each edits an
+ * already-parsed cJSON subscriber doc in place (no Redis), mirroring the
+ * corresponding mongoc_* writer. Non-static so the unit tests can drive them
+ * directly; the vtable methods pass them to redis_update_subscriber().
+ *   - sqn_set:       data is uint64_t* -> set security.sqn
+ *   - sqn_increment: data is NULL      -> security.sqn = (old + 32) & OGS_MAX_SQN
+ *   - imeisv:        data is char*      -> set top-level scalar imeisv
+ *   - mme:           data is redis_mme_arg_t* -> set mme_host/realm/timestamp/purge_flag
+ */
+int redis_mutate_sqn_set(cJSON *doc, void *data);
+int redis_mutate_sqn_increment(cJSON *doc, void *data);
+int redis_mutate_imeisv(cJSON *doc, void *data);
+int redis_mutate_mme(cJSON *doc, void *data);
+
 /* Parse functions (pure; per-file). Declared here, defined in the readers. */
 int redis_parse_auth_info(const cJSON *doc, ogs_dbi_auth_info_t *out);
 int redis_parse_subscription_data(const cJSON *doc, ogs_subscription_data_t *out);

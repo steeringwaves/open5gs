@@ -503,6 +503,113 @@ static void parse_ims_data_ok(abts_case *tc, void *data)
     cJSON_Delete(doc);
 }
 
+static void mutate_sqn_set_ok(abts_case *tc, void *data)
+{
+    cJSON *doc = cJSON_Parse(SUBSCRIBER_JSON);
+    cJSON *sec, *sqn;
+    uint64_t value = 42;
+    int rv;
+
+    ABTS_PTR_NOTNULL(tc, doc);
+    rv = redis_mutate_sqn_set(doc, &value);
+    ABTS_INT_EQUAL(tc, OGS_OK, rv);
+
+    sec = cJSON_GetObjectItemCaseSensitive(doc, OGS_SECURITY_STRING);
+    ABTS_PTR_NOTNULL(tc, sec);
+    sqn = cJSON_GetObjectItemCaseSensitive(sec, OGS_SQN_STRING);
+    ABTS_PTR_NOTNULL(tc, sqn);
+    ABTS_TRUE(tc, cJSON_IsNumber(sqn));
+    ABTS_TRUE(tc, (uint64_t)cJSON_GetNumberValue(sqn) == 42);
+
+    cJSON_Delete(doc);
+}
+
+static void mutate_sqn_increment_ok(abts_case *tc, void *data)
+{
+    cJSON *doc = cJSON_Parse(SUBSCRIBER_JSON);
+    cJSON *sec, *sqn;
+    uint64_t old_sqn, expected;
+    int rv;
+
+    ABTS_PTR_NOTNULL(tc, doc);
+
+    /* Capture the fixture's starting sqn (96). */
+    sec = cJSON_GetObjectItemCaseSensitive(doc, OGS_SECURITY_STRING);
+    ABTS_PTR_NOTNULL(tc, sec);
+    sqn = cJSON_GetObjectItemCaseSensitive(sec, OGS_SQN_STRING);
+    ABTS_PTR_NOTNULL(tc, sqn);
+    old_sqn = (uint64_t)cJSON_GetNumberValue(sqn);
+    expected = (old_sqn + 32) & OGS_MAX_SQN;
+
+    rv = redis_mutate_sqn_increment(doc, NULL);
+    ABTS_INT_EQUAL(tc, OGS_OK, rv);
+
+    sec = cJSON_GetObjectItemCaseSensitive(doc, OGS_SECURITY_STRING);
+    sqn = cJSON_GetObjectItemCaseSensitive(sec, OGS_SQN_STRING);
+    ABTS_PTR_NOTNULL(tc, sqn);
+    ABTS_TRUE(tc, (uint64_t)cJSON_GetNumberValue(sqn) == expected);
+
+    cJSON_Delete(doc);
+}
+
+static void mutate_imeisv_ok(abts_case *tc, void *data)
+{
+    cJSON *doc = cJSON_Parse(SUBSCRIBER_JSON);
+    cJSON *imeisv;
+    char value[] = "1234567890123456";
+    int rv;
+
+    ABTS_PTR_NOTNULL(tc, doc);
+    rv = redis_mutate_imeisv(doc, value);
+    ABTS_INT_EQUAL(tc, OGS_OK, rv);
+
+    /* Scalar string at top level (matches mongoc_update_imeisv). */
+    imeisv = cJSON_GetObjectItemCaseSensitive(doc, OGS_IMEISV_STRING);
+    ABTS_PTR_NOTNULL(tc, imeisv);
+    ABTS_TRUE(tc, cJSON_IsString(imeisv));
+    ABTS_STR_EQUAL(tc, value, imeisv->valuestring);
+
+    cJSON_Delete(doc);
+}
+
+static void mutate_mme_ok(abts_case *tc, void *data)
+{
+    cJSON *doc = cJSON_Parse(SUBSCRIBER_JSON);
+    cJSON *host, *realm, *ts, *purge;
+    redis_mme_arg_t arg = {
+        .host = "mme0.example.com",
+        .realm = "example.com",
+        .purge = true,
+    };
+    int rv;
+
+    ABTS_PTR_NOTNULL(tc, doc);
+    rv = redis_mutate_mme(doc, &arg);
+    ABTS_INT_EQUAL(tc, OGS_OK, rv);
+
+    /* Scalars (read-back parity with subscription_data reader). */
+    host = cJSON_GetObjectItemCaseSensitive(doc, OGS_MME_HOST_STRING);
+    ABTS_PTR_NOTNULL(tc, host);
+    ABTS_TRUE(tc, cJSON_IsString(host));
+    ABTS_STR_EQUAL(tc, "mme0.example.com", host->valuestring);
+
+    realm = cJSON_GetObjectItemCaseSensitive(doc, OGS_MME_REALM_STRING);
+    ABTS_PTR_NOTNULL(tc, realm);
+    ABTS_TRUE(tc, cJSON_IsString(realm));
+    ABTS_STR_EQUAL(tc, "example.com", realm->valuestring);
+
+    ts = cJSON_GetObjectItemCaseSensitive(doc, OGS_MME_TIMESTAMP_STRING);
+    ABTS_PTR_NOTNULL(tc, ts);
+    ABTS_TRUE(tc, cJSON_IsNumber(ts));
+
+    purge = cJSON_GetObjectItemCaseSensitive(doc, OGS_PURGE_FLAG_STRING);
+    ABTS_PTR_NOTNULL(tc, purge);
+    ABTS_TRUE(tc, cJSON_IsBool(purge));
+    ABTS_TRUE(tc, cJSON_IsTrue(purge));
+
+    cJSON_Delete(doc);
+}
+
 abts_suite *test_redis_parse(abts_suite *suite);
 abts_suite *test_redis_parse(abts_suite *suite)
 {
@@ -519,5 +626,9 @@ abts_suite *test_redis_parse(abts_suite *suite)
     abts_run_test(suite, parse_session_data_pcc, NULL);
     abts_run_test(suite, parse_msisdn_data_ok, NULL);
     abts_run_test(suite, parse_ims_data_ok, NULL);
+    abts_run_test(suite, mutate_sqn_set_ok, NULL);
+    abts_run_test(suite, mutate_sqn_increment_ok, NULL);
+    abts_run_test(suite, mutate_imeisv_ok, NULL);
+    abts_run_test(suite, mutate_mme_ok, NULL);
     return suite;
 }

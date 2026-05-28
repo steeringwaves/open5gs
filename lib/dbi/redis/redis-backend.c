@@ -269,29 +269,3 @@ int redis_watch_init(void)
     return OGS_ERROR;
 }
 int redis_poll_change_stream(void) { return OGS_ERROR; }
-
-/*
- * Temporary Phase-2 stubs for the reader/writer vtable methods. Each is
- * replaced by its real implementation (in redis-subscription.c /
- * redis-session.c / redis-ims.c) as Tasks 3-7 land.
- */
-int redis_update_sqn(char *supi, uint64_t sqn)
-{
-    ogs_fatal("redis_update_sqn not implemented yet");
-    return OGS_ERROR;
-}
-int redis_increment_sqn(char *supi)
-{
-    ogs_fatal("redis_increment_sqn not implemented yet");
-    return OGS_ERROR;
-}
-int redis_update_imeisv(char *supi, char *imeisv)
-{
-    ogs_fatal("redis_update_imeisv not implemented yet");
-    return OGS_ERROR;
-}
-int redis_update_mme(char *supi, char *host, char *realm, bool purge)
-{
-    ogs_fatal("redis_update_mme not implemented yet");
-    return OGS_ERROR;
-}

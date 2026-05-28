@@ -445,3 +445,135 @@ int redis_subscription_data(char *supi,
     cJSON_Delete(doc);
     return rv;
 }
+
+/*
+ * Writers. Each vtable method drives redis_update_subscriber() with a pure
+ * mutate function that edits the parsed cJSON doc. The mutate functions mirror
+ * their mongoc_* counterparts in mongoc-subscription.c. To "replace" a field we
+ * delete-then-add (robust when the key may be absent).
+ */
+
+/* $set security.sqn = sqn  (mirrors mongoc_update_sqn). data: uint64_t* */
+int redis_mutate_sqn_set(cJSON *doc, void *data)
+{
+    uint64_t sqn;
+    cJSON *sec;
+
+    ogs_assert(doc); ogs_assert(data);
+    sqn = *(uint64_t *)data;
+
+    sec = cJSON_GetObjectItemCaseSensitive(doc, OGS_SECURITY_STRING);
+    if (!sec || !cJSON_IsObject(sec)) {
+        if (sec)
+            cJSON_DeleteItemFromObjectCaseSensitive(doc, OGS_SECURITY_STRING);
+        sec = cJSON_AddObjectToObject(doc, OGS_SECURITY_STRING);
+        ogs_assert(sec);
+    }
+
+    cJSON_DeleteItemFromObjectCaseSensitive(sec, OGS_SQN_STRING);
+    ogs_assert(cJSON_AddNumberToObject(sec, OGS_SQN_STRING, (double)sqn));
+
+    return OGS_OK;
+}
+
+/*
+ * security.sqn = (current_sqn + 32) & OGS_MAX_SQN
+ * (mirrors mongoc_increment_sqn: $inc by 32 then $bit-and OGS_MAX_SQN).
+ * Treats a missing security/sqn as current == 0. data: NULL.
+ */
+int redis_mutate_sqn_increment(cJSON *doc, void *data)
+{
+    uint64_t sqn = 0;
+    cJSON *sec, *cur;
+
+    ogs_assert(doc);
+
+    sec = cJSON_GetObjectItemCaseSensitive(doc, OGS_SECURITY_STRING);
+    if (!sec || !cJSON_IsObject(sec)) {
+        if (sec)
+            cJSON_DeleteItemFromObjectCaseSensitive(doc, OGS_SECURITY_STRING);
+        sec = cJSON_AddObjectToObject(doc, OGS_SECURITY_STRING);
+        ogs_assert(sec);
+    } else {
+        cur = cJSON_GetObjectItemCaseSensitive(sec, OGS_SQN_STRING);
+        if (cur && cJSON_IsNumber(cur))
+            sqn = (uint64_t)cJSON_GetNumberValue(cur);
+    }
+
+    sqn = (sqn + 32) & OGS_MAX_SQN;
+
+    cJSON_DeleteItemFromObjectCaseSensitive(sec, OGS_SQN_STRING);
+    ogs_assert(cJSON_AddNumberToObject(sec, OGS_SQN_STRING, (double)sqn));
+
+    return OGS_OK;
+}
+
+/* $set imeisv = <scalar string>  (mirrors mongoc_update_imeisv UPSERT). */
+int redis_mutate_imeisv(cJSON *doc, void *data)
+{
+    const char *imeisv;
+
+    ogs_assert(doc); ogs_assert(data);
+    imeisv = (const char *)data;
+
+    cJSON_DeleteItemFromObjectCaseSensitive(doc, OGS_IMEISV_STRING);
+    ogs_assert(cJSON_AddStringToObject(doc, OGS_IMEISV_STRING, imeisv));
+
+    return OGS_OK;
+}
+
+/*
+ * $set mme_host/mme_realm (scalar strings), mme_timestamp (= ogs_time_now()),
+ * purge_flag (scalar bool). Mirrors mongoc_update_mme. Stored as SCALARS so the
+ * subscription_data reader (which reads them as scalar UTF8/bool) reads back the
+ * same values. data: redis_mme_arg_t*.
+ */
+int redis_mutate_mme(cJSON *doc, void *data)
+{
+    redis_mme_arg_t *arg;
+
+    ogs_assert(doc); ogs_assert(data);
+    arg = (redis_mme_arg_t *)data;
+
+    cJSON_DeleteItemFromObjectCaseSensitive(doc, OGS_MME_HOST_STRING);
+    ogs_assert(cJSON_AddStringToObject(
+            doc, OGS_MME_HOST_STRING, arg->host ? arg->host : ""));
+
+    cJSON_DeleteItemFromObjectCaseSensitive(doc, OGS_MME_REALM_STRING);
+    ogs_assert(cJSON_AddStringToObject(
+            doc, OGS_MME_REALM_STRING, arg->realm ? arg->realm : ""));
+
+    cJSON_DeleteItemFromObjectCaseSensitive(doc, OGS_MME_TIMESTAMP_STRING);
+    ogs_assert(cJSON_AddNumberToObject(
+            doc, OGS_MME_TIMESTAMP_STRING, (double)ogs_time_now()));
+
+    cJSON_DeleteItemFromObjectCaseSensitive(doc, OGS_PURGE_FLAG_STRING);
+    ogs_assert(cJSON_AddBoolToObject(doc, OGS_PURGE_FLAG_STRING, arg->purge));
+
+    return OGS_OK;
+}
+
+int redis_update_sqn(char *supi, uint64_t sqn)
+{
+    ogs_assert(supi);
+    return redis_update_subscriber(supi, redis_mutate_sqn_set, &sqn);
+}
+
+int redis_increment_sqn(char *supi)
+{
+    ogs_assert(supi);
+    return redis_update_subscriber(supi, redis_mutate_sqn_increment, NULL);
+}
+
+int redis_update_imeisv(char *supi, char *imeisv)
+{
+    ogs_assert(supi); ogs_assert(imeisv);
+    return redis_update_subscriber(supi, redis_mutate_imeisv, imeisv);
+}
+
+int redis_update_mme(char *supi, char *host, char *realm, bool purge)
+{
+    redis_mme_arg_t arg = { .host = host, .realm = realm, .purge = purge };
+    ogs_assert(supi);
+    return redis_update_subscriber(supi, redis_mutate_mme, &arg);
+}
