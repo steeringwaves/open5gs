@@ -17,28 +17,65 @@
 
 libdbi_sources = files('''
     ogs-dbi.h
+    ogs-dbi-backend.h
 
     ogs-mongoc.h
 
-    ogs-mongoc.c
+    ogs-dbi-core.c
     subscription.c
     session.c
     ims.c
 '''.split())
 
-libmongoc_dep = dependency('libmongoc-1.0')
+backend_deps = []
+backend_c_args = []
 
-libdbi_inc = include_directories('.')
+libmongoc_dep = dependency('libmongoc-1.0', required: get_option('mongo'))
+if libmongoc_dep.found()
+    libdbi_sources += files('''
+        mongoc/mongoc-internal.h
+        mongoc/mongoc-backend.c
+        mongoc/mongoc-subscription.c
+        mongoc/mongoc-session.c
+        mongoc/mongoc-ims.c
+        mongoc/mongoc-watch.c
+    '''.split())
+    backend_deps += libmongoc_dep
+    backend_c_args += '-DOGS_DBI_HAVE_MONGOC'
+endif
+
+libhiredis_dep = dependency('hiredis', required: get_option('redis'))
+if libhiredis_dep.found()
+    libdbi_sources += files('''
+        redis/cJSON.h
+        redis/cJSON.c
+        redis/redis-internal.h
+        redis/redis-backend.c
+        redis/redis-subscription.c
+        redis/redis-session.c
+        redis/redis-ims.c
+        redis/redis-watch.c
+    '''.split())
+    backend_deps += libhiredis_dep
+    backend_c_args += '-DOGS_DBI_HAVE_REDIS'
+endif
+
+if not libmongoc_dep.found() and not libhiredis_dep.found()
+    error('At least one of -Dmongo / -Dredis must be enabled')
+endif
+
+libdbi_inc = include_directories('.', 'mongoc', 'redis')
 
 libdbi = library('ogsdbi',
     sources : libdbi_sources,
     version : libogslib_version,
-    c_args : '-DOGS_DBI_COMPILATION',
+    c_args : ['-DOGS_DBI_COMPILATION'] + backend_c_args,
     include_directories : [libdbi_inc, libinc],
-    dependencies : [libproto_dep, libmongoc_dep],
+    dependencies : [libproto_dep] + backend_deps,
     install : true)
 
 libdbi_dep = declare_dependency(
     link_with : libdbi,
+    compile_args : backend_c_args,
     include_directories : [libdbi_inc, libinc],
-    dependencies : [libproto_dep, libmongoc_dep])
+    dependencies : [libproto_dep] + backend_deps)

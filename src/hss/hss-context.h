@@ -94,8 +94,9 @@ char *hss_cx_download_user_data(
         char *user_name, char *visited_network_identifier,
         ogs_ims_data_t *ims_data);
 
+int hss_db_watch_init(void);
 int hss_db_poll_change_stream(void);
-int hss_handle_change_event(const bson_t *document);
+int hss_handle_change_event(const ogs_dbi_change_event_t *event);
 
 
 #ifdef __cplusplus

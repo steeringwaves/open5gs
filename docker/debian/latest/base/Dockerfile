@@ -23,6 +23,7 @@ RUN apt-get update && \
         libgcrypt-dev \
         libssl-dev \
         libmongoc-dev \
+        libhiredis-dev \
         libbson-dev \
         libyaml-dev \
         libmicrohttpd-dev \

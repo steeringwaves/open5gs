@@ -21,16 +21,25 @@ subdir('core')
 subdir('crypt')
 subdir('sctp')
 subdir('unit')
+subdir('dbi')
 subdir('af')
-subdir('common')
-subdir('app')
-subdir('registration')
-subdir('vonr')
-subdir('slice')
-subdir('attach')
-subdir('volte')
-subdir('csfb')
-subdir('310014')
-subdir('handover')
-subdir('non3gpp')
-subdir('transfer')
+
+# The integration tests below provision subscribers into MongoDB via BSON
+# (tests/common, and the libtestepc/libtest5gc aggregates in tests/app).
+# They are built only when the MongoDB backend is enabled; a Redis-only
+# build (-Dmongo=disabled) skips them so the tree compiles without
+# libmongoc/libbson headers present.
+if libmongoc_dep.found()
+    subdir('common')
+    subdir('app')
+    subdir('registration')
+    subdir('vonr')
+    subdir('slice')
+    subdir('attach')
+    subdir('volte')
+    subdir('csfb')
+    subdir('310014')
+    subdir('handover')
+    subdir('non3gpp')
+    subdir('transfer')
+endif
