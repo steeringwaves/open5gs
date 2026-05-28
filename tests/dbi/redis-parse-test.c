@@ -192,6 +192,35 @@ static const char SESSION_PCC_JSON[] =
     "\"subscriber_status\":0"
     "}";
 
+/*
+ * A subscriber fixture carrying IMS data: an imsi, a msisdn[] array, and one
+ * ifc entry. The ifc has a priority, an application_server{server_name,
+ * default_handling}, and a trigger_point{condition_type_cnf, spt:[{
+ * condition_negated, group, method:"INVITE"}]}. Exercises the ifc[]/
+ * trigger_point/spt[] walk and the OGS_SPT_HAS_METHOD type tagging mirrored
+ * from mongoc_ims_data.
+ */
+static const char IMS_JSON[] =
+    "{"
+    "\"imsi\":\"001010000000004\","
+    "\"msisdn\":[\"491725670004\"],"
+    "\"ifc\":[{"
+        "\"priority\":1,"
+        "\"application_server\":{"
+            "\"server_name\":\"sip:as.example.com\","
+            "\"default_handling\":0"
+        "},"
+        "\"trigger_point\":{"
+            "\"condition_type_cnf\":0,"
+            "\"spt\":[{"
+                "\"condition_negated\":0,"
+                "\"group\":0,"
+                "\"method\":\"INVITE\""
+            "}]"
+        "}"
+    "}]"
+    "}";
+
 static void uri_basic(abts_case *tc, void *data)
 {
     char *host = NULL, *prefix = NULL; int port = 0;
@@ -417,6 +446,63 @@ static void parse_session_data_pcc(abts_case *tc, void *data)
     cJSON_Delete(doc);
 }
 
+static void parse_msisdn_data_ok(abts_case *tc, void *data)
+{
+    cJSON *doc = cJSON_Parse(SUBSCRIBER_JSON);
+    ogs_msisdn_data_t msisdn_data;
+    int rv;
+
+    ABTS_PTR_NOTNULL(tc, doc);
+    rv = redis_parse_msisdn_data(doc, &msisdn_data);
+    ABTS_INT_EQUAL(tc, OGS_OK, rv);
+
+    /* imsi.bcd matches the fixture's imsi */
+    ABTS_STR_EQUAL(tc, "001010000000001", msisdn_data.imsi.bcd);
+
+    /* msisdn[] */
+    ABTS_TRUE(tc, msisdn_data.num_of_msisdn >= 1);
+    ABTS_STR_EQUAL(tc, "491725670000", msisdn_data.msisdn[0].bcd);
+
+    cJSON_Delete(doc);
+}
+
+static void parse_ims_data_ok(abts_case *tc, void *data)
+{
+    cJSON *doc = cJSON_Parse(IMS_JSON);
+    ogs_ims_data_t ims_data;
+    int rv;
+
+    ABTS_PTR_NOTNULL(tc, doc);
+    rv = redis_parse_ims_data(doc, &ims_data);
+    ABTS_INT_EQUAL(tc, OGS_OK, rv);
+
+    /* msisdn[] */
+    ABTS_TRUE(tc, ims_data.num_of_msisdn >= 1);
+    ABTS_STR_EQUAL(tc, "491725670004", ims_data.msisdn[0].bcd);
+
+    /* ifc[] */
+    ABTS_INT_EQUAL(tc, 1, ims_data.num_of_ifc);
+    ABTS_INT_EQUAL(tc, 1, ims_data.ifc[0].priority);
+
+    /* application_server */
+    ABTS_PTR_NOTNULL(tc,
+            (void *)ims_data.ifc[0].application_server.server_name);
+    ABTS_STR_EQUAL(tc, "sip:as.example.com",
+            ims_data.ifc[0].application_server.server_name);
+
+    /* trigger_point / spt[] */
+    ABTS_INT_EQUAL(tc, 1, ims_data.ifc[0].trigger_point.num_of_spt);
+    ABTS_INT_EQUAL(tc, OGS_SPT_HAS_METHOD,
+            ims_data.ifc[0].trigger_point.spt[0].type);
+    ABTS_PTR_NOTNULL(tc,
+            (void *)ims_data.ifc[0].trigger_point.spt[0].method);
+    ABTS_INT_EQUAL(tc, 0, strcmp("INVITE",
+            ims_data.ifc[0].trigger_point.spt[0].method));
+
+    ogs_ims_data_free(&ims_data);
+    cJSON_Delete(doc);
+}
+
 abts_suite *test_redis_parse(abts_suite *suite);
 abts_suite *test_redis_parse(abts_suite *suite)
 {
@@ -431,5 +517,7 @@ abts_suite *test_redis_parse(abts_suite *suite)
     abts_run_test(suite, parse_session_data_ok, NULL);
     abts_run_test(suite, parse_session_data_no_match, NULL);
     abts_run_test(suite, parse_session_data_pcc, NULL);
+    abts_run_test(suite, parse_msisdn_data_ok, NULL);
+    abts_run_test(suite, parse_ims_data_ok, NULL);
     return suite;
 }

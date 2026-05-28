@@ -295,13 +295,3 @@ int redis_update_mme(char *supi, char *host, char *realm, bool purge)
     ogs_fatal("redis_update_mme not implemented yet");
     return OGS_ERROR;
 }
-int redis_msisdn_data(char *id, ogs_msisdn_data_t *out)
-{
-    ogs_fatal("redis_msisdn_data not implemented yet");
-    return OGS_ERROR;
-}
-int redis_ims_data(char *supi, ogs_ims_data_t *out)
-{
-    ogs_fatal("redis_ims_data not implemented yet");
-    return OGS_ERROR;
-}
