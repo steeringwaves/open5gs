@@ -266,6 +266,56 @@ static void parse_subscription_data_multi(abts_case *tc, void *data)
     cJSON_Delete(doc);
 }
 
+static void parse_session_data_ok(abts_case *tc, void *data)
+{
+    cJSON *doc = cJSON_Parse(SUBSCRIBER_JSON);
+    ogs_session_data_t session_data;
+    ogs_s_nssai_t s_nssai;
+    int rv;
+
+    ABTS_PTR_NOTNULL(tc, doc);
+
+    /* Build the s_nssai matching the fixture's single slice (sst=1, no sd). */
+    memset(&s_nssai, 0, sizeof(s_nssai));
+    s_nssai.sst = 1;
+    s_nssai.sd.v = OGS_S_NSSAI_NO_SD_VALUE;
+
+    memset(&session_data, 0, sizeof(session_data));
+    rv = redis_parse_session_data(doc, &s_nssai, "internet", &session_data);
+    ABTS_INT_EQUAL(tc, OGS_OK, rv);
+
+    ABTS_PTR_NOTNULL(tc, session_data.session.name);
+    ABTS_STR_EQUAL(tc, "internet", session_data.session.name);
+    ABTS_INT_EQUAL(tc, 9, session_data.session.qos.index);
+    ABTS_INT_EQUAL(tc, OGS_PDU_SESSION_TYPE_IPV4V6,
+            session_data.session.session_type);
+    ABTS_TRUE(tc, session_data.session.ambr.downlink == 1000000000ULL);
+
+    OGS_SESSION_DATA_FREE(&session_data);
+    cJSON_Delete(doc);
+}
+
+static void parse_session_data_no_match(abts_case *tc, void *data)
+{
+    cJSON *doc = cJSON_Parse(SUBSCRIBER_JSON);
+    ogs_session_data_t session_data;
+    ogs_s_nssai_t s_nssai;
+    int rv;
+
+    ABTS_PTR_NOTNULL(tc, doc);
+
+    memset(&s_nssai, 0, sizeof(s_nssai));
+    s_nssai.sst = 1;
+    s_nssai.sd.v = OGS_S_NSSAI_NO_SD_VALUE;
+
+    memset(&session_data, 0, sizeof(session_data));
+    rv = redis_parse_session_data(doc, &s_nssai, "nonexistent", &session_data);
+    ABTS_INT_EQUAL(tc, OGS_ERROR, rv);
+
+    OGS_SESSION_DATA_FREE(&session_data);
+    cJSON_Delete(doc);
+}
+
 abts_suite *test_redis_parse(abts_suite *suite);
 abts_suite *test_redis_parse(abts_suite *suite)
 {
@@ -277,5 +327,7 @@ abts_suite *test_redis_parse(abts_suite *suite)
     abts_run_test(suite, parse_auth_info_ok, NULL);
     abts_run_test(suite, parse_subscription_data_ok, NULL);
     abts_run_test(suite, parse_subscription_data_multi, NULL);
+    abts_run_test(suite, parse_session_data_ok, NULL);
+    abts_run_test(suite, parse_session_data_no_match, NULL);
     return suite;
 }
