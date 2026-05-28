@@ -40,7 +40,7 @@ static void test_build_subscriber(abts_case *tc, void *data)
 {
     dbctl_add_args_t args;
     cJSON *doc, *security, *item, *slice, *slice0, *session, *session0;
-    cJSON *qos, *arp;
+    cJSON *qos, *arp, *ambr, *dl, *ul;
 
     memset(&args, 0, sizeof(args));
     args.imsi = "001010000000001";
@@ -167,6 +167,42 @@ static void test_build_subscriber(abts_case *tc, void *data)
     item = cJSON_GetObjectItemCaseSensitive(arp, "pre_emption_vulnerability");
     ABTS_PTR_NOTNULL(tc, item);
     ABTS_INT_EQUAL(tc, 1, (int)cJSON_GetNumberValue(item));
+
+    /* session[0].ambr (APN-AMBR) has downlink/uplink {value,unit} */
+    ambr = cJSON_GetObjectItemCaseSensitive(session0, "ambr");
+    ABTS_PTR_NOTNULL(tc, ambr);
+    ABTS_TRUE(tc, cJSON_IsObject(ambr));
+    ABTS_PTR_NOTNULL(tc, cJSON_GetObjectItemCaseSensitive(ambr, "downlink"));
+    ABTS_PTR_NOTNULL(tc, cJSON_GetObjectItemCaseSensitive(ambr, "uplink"));
+
+    /*
+     * Top-level ambr (UE-AMBR) must exist with downlink/uplink {value,unit}.
+     * The Redis reader maps this onto subscription_data->ambr, which the HSS
+     * advertises as UE-AMBR in S6a ULA/IDR; without it the HSS sends 0/0.
+     */
+    ambr = cJSON_GetObjectItemCaseSensitive(doc, "ambr");
+    ABTS_PTR_NOTNULL(tc, ambr);
+    ABTS_TRUE(tc, cJSON_IsObject(ambr));
+
+    dl = cJSON_GetObjectItemCaseSensitive(ambr, "downlink");
+    ABTS_PTR_NOTNULL(tc, dl);
+    ABTS_TRUE(tc, cJSON_IsObject(dl));
+    item = cJSON_GetObjectItemCaseSensitive(dl, "value");
+    ABTS_PTR_NOTNULL(tc, item);
+    ABTS_INT_EQUAL(tc, 1, (int)cJSON_GetNumberValue(item));
+    item = cJSON_GetObjectItemCaseSensitive(dl, "unit");
+    ABTS_PTR_NOTNULL(tc, item);
+    ABTS_INT_EQUAL(tc, 3, (int)cJSON_GetNumberValue(item));
+
+    ul = cJSON_GetObjectItemCaseSensitive(ambr, "uplink");
+    ABTS_PTR_NOTNULL(tc, ul);
+    ABTS_TRUE(tc, cJSON_IsObject(ul));
+    item = cJSON_GetObjectItemCaseSensitive(ul, "value");
+    ABTS_PTR_NOTNULL(tc, item);
+    ABTS_INT_EQUAL(tc, 1, (int)cJSON_GetNumberValue(item));
+    item = cJSON_GetObjectItemCaseSensitive(ul, "unit");
+    ABTS_PTR_NOTNULL(tc, item);
+    ABTS_INT_EQUAL(tc, 3, (int)cJSON_GetNumberValue(item));
 
     /* dbctl_subscriber_imsi returns the imsi */
     ABTS_STR_EQUAL(tc, "001010000000001", dbctl_subscriber_imsi(doc));
@@ -436,6 +472,13 @@ static void test_cli_backend_readback(abts_case *tc, void *data)
         ABTS_INT_EQUAL(tc, 9,
                 subscription_data.slice[0].session[0].qos.index);
     }
+    /*
+     * The top-level UE-AMBR must read back as the 1 Gbps default (value 1,
+     * unit 3 -> 1*1000^3 bps), not 0/0. This is the field the HSS advertises
+     * as UE-AMBR in S6a ULA/IDR.
+     */
+    ABTS_TRUE(tc, subscription_data.ambr.downlink == 1000000000ULL);
+    ABTS_TRUE(tc, subscription_data.ambr.uplink == 1000000000ULL);
     ogs_subscription_data_free(&subscription_data);
 
     ogs_dbi_final();

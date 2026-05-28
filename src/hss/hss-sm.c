@@ -94,6 +94,7 @@ void hss_state_operational(ogs_fsm_t *s, hss_event_t *e)
 
         ogs_dbi_change_event_free(
                 (ogs_dbi_change_event_t *)e->dbi.change_event);
+        e->dbi.change_event = NULL;   /* prevent double-free in hss_event_free */
         break;
 
     default:

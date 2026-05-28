@@ -19,6 +19,7 @@
 
 #include "hss-event.h"
 #include "ogs-app.h"
+#include "ogs-dbi.h"
 
 static OGS_POOL(pool, hss_event_t);
 
@@ -54,6 +55,18 @@ hss_event_t *hss_event_new(hss_event_e id)
 void hss_event_free(hss_event_t *e)
 {
     ogs_assert(e);
+
+    /*
+     * Defensive cleanup: the normal HSS_EVENT_DBI_MESSAGE path frees and NULLs
+     * change_event in hss-sm.c before this runs. This guards a teardown race
+     * where a DBI event is freed outside the operational state, which would
+     * otherwise leak the ogs_dbi_change_event_t.
+     */
+    if (e->dbi.change_event) {
+        ogs_dbi_change_event_free(e->dbi.change_event);
+        e->dbi.change_event = NULL;
+    }
+
     ogs_pool_free(&pool, e);
 }
 

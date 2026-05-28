@@ -523,7 +523,6 @@ static int cmd_reset_sqn(dbctl_redis_t *db, int argc, char *argv[])
 {
     const char *imsi = NULL;
     long value = 0;
-    int have_value = 0;
     cJSON *doc = NULL, *security, *sqn;
     int c, existed = 0, rv = OGS_ERROR;
 
@@ -532,13 +531,12 @@ static int cmd_reset_sqn(dbctl_redis_t *db, int argc, char *argv[])
     while ((c = getopt_long(argc, argv, "", cmd_long_options, NULL)) != -1) {
         switch (c) {
         case OPT_IMSI:  imsi = optarg; break;
-        case OPT_VALUE: value = atol(optarg); have_value = 1; break;
+        case OPT_VALUE: value = atol(optarg); break;
         default:
             ogs_error("reset-sqn: unknown or invalid option");
             return OGS_ERROR;
         }
     }
-    (void)have_value;
 
     if (!imsi) {
         ogs_error("reset-sqn: --imsi is required");

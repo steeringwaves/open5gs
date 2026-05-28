@@ -79,7 +79,7 @@
 #define DBCTL_ARP_PRE_EMPTION_CAP       1
 #define DBCTL_ARP_PRE_EMPTION_VUL       1
 #define DBCTL_AMBR_VALUE_DEFAULT        1
-#define DBCTL_AMBR_UNIT_DEFAULT         3   /* Mbps (1000^3) */
+#define DBCTL_AMBR_UNIT_DEFAULT         3   /* Gbps (1000^3) */
 #define DBCTL_SCHEMA_VERSION_DEFAULT    1
 #define DBCTL_ACCESS_RESTRICTION_DEFAULT 32
 
@@ -222,10 +222,23 @@ cJSON *dbctl_build_subscriber(const dbctl_add_args_t *a)
     if (!cJSON_AddNumberToObject(arp, DBCTL_PRE_EMPTION_VULNERABILITY_STRING,
             DBCTL_ARP_PRE_EMPTION_VUL)) goto failed;
 
-    /* session[0].ambr */
+    /* session[0].ambr (APN-AMBR) */
     ambr = build_ambr();
     if (!ambr) goto failed;
     cJSON_AddItemToObject(session0, DBCTL_AMBR_STRING, ambr);
+
+    /*
+     * Top-level ambr (UE-AMBR). The Redis reader
+     * (redis_parse_subscription_data) reads a TOP-LEVEL OGS_AMBR_STRING into
+     * subscription_data->ambr, which the HSS advertises as UE-AMBR in S6a
+     * ULA/IDR. Without it the HSS would advertise UE-AMBR 0/0. Mirror the
+     * webui schema and legacy misc/db/open5gs-dbctl, which both write BOTH.
+     */
+    {
+        cJSON *ue_ambr = build_ambr();
+        if (!ue_ambr) goto failed;
+        cJSON_AddItemToObject(doc, DBCTL_AMBR_STRING, ue_ambr);
+    }
 
     /* top-level subscriber defaults */
     if (!cJSON_AddNumberToObject(doc, DBCTL_ACCESS_RESTRICTION_DATA_STRING,
