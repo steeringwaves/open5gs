@@ -22,25 +22,47 @@ libdbi_sources = files('''
     ogs-mongoc.h
 
     ogs-dbi-core.c
-    ogs-mongoc.c
     subscription.c
     session.c
     ims.c
 '''.split())
 
-libmongoc_dep = dependency('libmongoc-1.0')
+backend_deps = []
+backend_c_args = []
 
-libdbi_inc = include_directories('.')
+libmongoc_dep = dependency('libmongoc-1.0', required: get_option('mongo'))
+if libmongoc_dep.found()
+    libdbi_sources += files('''
+        ogs-mongoc.c
+
+        mongoc/mongoc-internal.h
+        mongoc/mongoc-backend.c
+    '''.split())
+    backend_deps += libmongoc_dep
+    backend_c_args += '-DOGS_DBI_HAVE_MONGOC'
+endif
+
+libhiredis_dep = dependency('hiredis', required: get_option('redis'))
+if libhiredis_dep.found()
+    backend_deps += libhiredis_dep
+    backend_c_args += '-DOGS_DBI_HAVE_REDIS'
+endif
+
+if not libmongoc_dep.found() and not libhiredis_dep.found()
+    error('At least one of -Dmongo / -Dredis must be enabled')
+endif
+
+libdbi_inc = include_directories('.', 'mongoc')
 
 libdbi = library('ogsdbi',
     sources : libdbi_sources,
     version : libogslib_version,
-    c_args : '-DOGS_DBI_COMPILATION',
+    c_args : ['-DOGS_DBI_COMPILATION'] + backend_c_args,
     include_directories : [libdbi_inc, libinc],
-    dependencies : [libproto_dep, libmongoc_dep],
+    dependencies : [libproto_dep] + backend_deps,
     install : true)
 
 libdbi_dep = declare_dependency(
     link_with : libdbi,
     include_directories : [libdbi_inc, libinc],
-    dependencies : [libproto_dep, libmongoc_dep])
+    dependencies : [libproto_dep] + backend_deps)

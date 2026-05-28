@@ -21,6 +21,10 @@
 #include "ogs-dbi.h"
 #include "ogs-dbi-backend.h"
 
+#ifdef OGS_DBI_HAVE_MONGOC
+extern const ogs_dbi_backend_t mongoc_backend;
+#endif
+
 int __ogs_dbi_domain;
 
 #define OGS_DBI_MAX_BACKENDS 4
@@ -95,6 +99,19 @@ static char *extract_scheme(const char *uri)
     return out;
 }
 
+static void register_builtin_backends(void)
+{
+    static bool registered = false;
+
+    if (registered)
+        return;
+    registered = true;
+
+#ifdef OGS_DBI_HAVE_MONGOC
+    ogs_dbi_backend_register(&mongoc_backend);
+#endif
+}
+
 int ogs_dbi_init(const char *uri)
 {
     char *scheme;
@@ -105,6 +122,8 @@ int ogs_dbi_init(const char *uri)
         ogs_error("dbi init: NULL URI");
         return OGS_ERROR;
     }
+
+    register_builtin_backends();
 
     scheme = extract_scheme(uri);
     if (!scheme) {
