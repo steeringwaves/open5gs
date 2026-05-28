@@ -103,3 +103,63 @@ char *redis_keyspace_channel_to_imsi(const char *channel, const char *prefix)
     if (*head_end == '\0') return NULL;
     return ogs_strdup(head_end);
 }
+
+static bool suppress_recent_rich(const char *imsi_bcd)
+{
+    int i;
+    ogs_time_t now = ogs_time_now();
+    for (i = 0; i < OGS_REDIS_SUPPRESS_SLOTS; i++) {
+        if (ogs_redis()->suppress[i].imsi_bcd[0] &&
+                !strcmp(ogs_redis()->suppress[i].imsi_bcd, imsi_bcd) &&
+                (now - ogs_redis()->suppress[i].when) < OGS_REDIS_SUPPRESS_WINDOW)
+            return true;
+    }
+    return false;
+}
+
+static void remember_rich(const char *imsi_bcd)
+{
+    int idx = ogs_redis()->suppress_next % OGS_REDIS_SUPPRESS_SLOTS;
+    ogs_cpystrn(ogs_redis()->suppress[idx].imsi_bcd, imsi_bcd,
+            sizeof(ogs_redis()->suppress[idx].imsi_bcd));
+    ogs_redis()->suppress[idx].when = ogs_time_now();
+    ogs_redis()->suppress_next++;
+}
+
+void redis_watch_process_message(redisReply *reply)
+{
+    if (!reply || reply->type != REDIS_REPLY_ARRAY || reply->elements < 3)
+        return;
+
+    const char *kind = reply->element[0] ? reply->element[0]->str : NULL;
+    if (!kind) return;
+
+    if (!strcmp(kind, "message")) {
+        /* rich channel: element[2] = JSON payload */
+        if (reply->elements < 3 || !reply->element[2] ||
+                reply->element[2]->type != REDIS_REPLY_STRING)
+            return;
+        char *imsi = NULL; uint32_t mask = 0;
+        if (redis_parse_rich_event(reply->element[2]->str, &imsi, &mask)
+                == OGS_OK && imsi) {
+            remember_rich(imsi);
+            ogs_dbi_dispatch_change_event(
+                    ogs_dbi_change_event_alloc(imsi, mask));
+            ogs_free(imsi);
+        }
+    } else if (!strcmp(kind, "pmessage")) {
+        /* keyspace fallback: element[2] = channel naming the key */
+        if (reply->elements < 4 || !reply->element[2] ||
+                reply->element[2]->type != REDIS_REPLY_STRING)
+            return;
+        char *imsi = redis_keyspace_channel_to_imsi(
+                reply->element[2]->str, ogs_redis()->prefix);
+        if (!imsi) return;
+        if (!suppress_recent_rich(imsi)) {
+            ogs_dbi_dispatch_change_event(
+                    ogs_dbi_change_event_alloc(imsi, OGS_DBI_FIELD_ALL));
+        }
+        ogs_free(imsi);
+    }
+    /* "subscribe"/"psubscribe" confirmations: ignored */
+}

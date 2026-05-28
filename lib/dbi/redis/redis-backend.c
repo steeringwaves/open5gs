@@ -320,5 +320,28 @@ int redis_watch_init(void)
     return OGS_OK;
 }
 
-/* Temporary no-op; the real non-blocking drain lands in Task 3. */
-int redis_poll_change_stream(void) { return OGS_OK; }
+int redis_poll_change_stream(void)
+{
+    void *vreply;
+
+    if (!ogs_redis()->sub_ctx)
+        return OGS_ERROR;
+
+    if (redisBufferRead(ogs_redis()->sub_ctx) == REDIS_ERR) {
+        if (ogs_redis()->sub_ctx->err == REDIS_ERR_IO &&
+                (errno == EAGAIN || errno == EWOULDBLOCK)) {
+            ogs_redis()->sub_ctx->err = 0;
+            ogs_redis()->sub_ctx->errstr[0] = '\0';
+        } else {
+            ogs_warn("redis watch read error: %s", ogs_redis()->sub_ctx->errstr);
+            return OGS_ERROR;
+        }
+    }
+
+    while (redisGetReplyFromReader(ogs_redis()->sub_ctx, &vreply) == REDIS_OK
+            && vreply) {
+        redis_watch_process_message((redisReply *)vreply);
+        freeReplyObject((redisReply *)vreply);
+    }
+    return OGS_OK;
+}
