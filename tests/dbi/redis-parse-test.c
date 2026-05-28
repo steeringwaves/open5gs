@@ -26,6 +26,51 @@
 /* redis_parse_uri is exposed (non-static) for testing; see redis-backend.c */
 int redis_parse_uri(const char *uri, char **host, int *port, char **prefix);
 
+/*
+ * Canonical subscriber fixture, embedded as a C string constant to keep the
+ * parse tests hermetic (no test-cwd dependence). This mirrors the contents of
+ * tests/dbi/fixtures/subscriber.json (which the Task 8 equivalence test reads).
+ * Keep the two in sync.
+ */
+static const char SUBSCRIBER_JSON[] =
+    "{"
+    "\"imsi\":\"001010000000001\","
+    "\"security\":{"
+        "\"k\":\"465B5CE8B199B49FAA5F0A2EE238A6BC\","
+        "\"opc\":\"E8ED289DEBA952E4283B54E88E6183CA\","
+        "\"amf\":\"8000\","
+        "\"rand\":\"562F9BDDD952644279AE7B3957F6C3FE\","
+        "\"sqn\":96"
+    "},"
+    "\"msisdn\":[\"491725670000\"],"
+    "\"ambr\":{"
+        "\"downlink\":{\"value\":1,\"unit\":3},"
+        "\"uplink\":{\"value\":1,\"unit\":3}"
+    "},"
+    "\"slice\":[{"
+        "\"sst\":1,"
+        "\"default_indicator\":true,"
+        "\"session\":[{"
+            "\"name\":\"internet\","
+            "\"type\":3,"
+            "\"qos\":{"
+                "\"index\":9,"
+                "\"arp\":{"
+                    "\"priority_level\":8,"
+                    "\"pre_emption_capability\":1,"
+                    "\"pre_emption_vulnerability\":1"
+                "}"
+            "},"
+            "\"ambr\":{"
+                "\"downlink\":{\"value\":1,\"unit\":3},"
+                "\"uplink\":{\"value\":1,\"unit\":3}"
+            "}"
+        "}]"
+    "}],"
+    "\"access_restriction_data\":32,"
+    "\"subscriber_status\":0"
+    "}";
+
 static void uri_basic(abts_case *tc, void *data)
 {
     char *host = NULL, *prefix = NULL; int port = 0;
@@ -64,6 +109,21 @@ static void init_selects_redis_backend(abts_case *tc, void *data)
     ABTS_PTR_NOTNULL(tc, (void *)ogs_dbi_backend_find("redis"));
 }
 
+static void parse_auth_info_ok(abts_case *tc, void *data)
+{
+    cJSON *doc = cJSON_Parse(SUBSCRIBER_JSON);
+    ogs_dbi_auth_info_t auth;
+    int rv;
+    ABTS_PTR_NOTNULL(tc, doc);
+    rv = redis_parse_auth_info(doc, &auth);
+    ABTS_INT_EQUAL(tc, OGS_OK, rv);
+    ABTS_INT_EQUAL(tc, 1, auth.use_opc);            /* fixture sets opc */
+    /* K first byte 0x46 from "465B..." */
+    ABTS_INT_EQUAL(tc, 0x46, auth.k[0]);
+    ABTS_TRUE(tc, auth.sqn > 0);
+    cJSON_Delete(doc);
+}
+
 abts_suite *test_redis_parse(abts_suite *suite);
 abts_suite *test_redis_parse(abts_suite *suite)
 {
@@ -72,5 +132,6 @@ abts_suite *test_redis_parse(abts_suite *suite)
     abts_run_test(suite, uri_defaults, NULL);
     abts_run_test(suite, uri_rejects_non_redis, NULL);
     abts_run_test(suite, init_selects_redis_backend, NULL);
+    abts_run_test(suite, parse_auth_info_ok, NULL);
     return suite;
 }

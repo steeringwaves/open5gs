@@ -1,0 +1,41 @@
+{
+  "imsi": "001010000000001",
+  "security": {
+    "k": "465B5CE8B199B49FAA5F0A2EE238A6BC",
+    "opc": "E8ED289DEBA952E4283B54E88E6183CA",
+    "amf": "8000",
+    "rand": "562F9BDDD952644279AE7B3957F6C3FE",
+    "sqn": 96
+  },
+  "msisdn": ["491725670000"],
+  "ambr": {
+    "downlink": { "value": 1, "unit": 3 },
+    "uplink": { "value": 1, "unit": 3 }
+  },
+  "slice": [
+    {
+      "sst": 1,
+      "default_indicator": true,
+      "session": [
+        {
+          "name": "internet",
+          "type": 3,
+          "qos": {
+            "index": 9,
+            "arp": {
+              "priority_level": 8,
+              "pre_emption_capability": 1,
+              "pre_emption_vulnerability": 1
+            }
+          },
+          "ambr": {
+            "downlink": { "value": 1, "unit": 3 },
+            "uplink": { "value": 1, "unit": 3 }
+          }
+        }
+      ]
+    }
+  ],
+  "access_restriction_data": 32,
+  "subscriber_status": 0
+}
