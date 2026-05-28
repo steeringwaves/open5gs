@@ -22,16 +22,20 @@
 
 abts_suite *test_change_event(abts_suite *suite);
 abts_suite *test_backend_registry(abts_suite *suite);
+#ifdef HAVE_REDIS_TESTS
 abts_suite *test_redis_parse(abts_suite *suite);
 abts_suite *test_redis_equivalence(abts_suite *suite);
+#endif
 
 const struct testlist {
     abts_suite *(*func)(abts_suite *suite);
 } alltests[] = {
     { test_change_event },
     { test_backend_registry },
+#ifdef HAVE_REDIS_TESTS
     { test_redis_parse },
     { test_redis_equivalence },
+#endif
     { NULL },
 };
 

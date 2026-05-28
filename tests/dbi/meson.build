@@ -15,17 +15,29 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+# The change-event and backend-registry suites are backend-agnostic and always
+# built. The redis-* suites include <hiredis.h> via the redis backend header, so
+# they are only built when the Redis backend is enabled (else a -Dredis=disabled
+# build has no hiredis on the include path).
 testdbi_sources = files('''
     abts-main.c
     change-event-test.c
     backend-registry-test.c
-    redis-parse-test.c
-    redis-equivalence-test.c
 '''.split())
+
+testdbi_c_args = testunit_core_cc_flags
+
+if libhiredis_dep.found()
+    testdbi_sources += files('''
+        redis-parse-test.c
+        redis-equivalence-test.c
+    '''.split())
+    testdbi_c_args += '-DHAVE_REDIS_TESTS'
+endif
 
 testdbi_exe = executable('dbi-tests',
     sources : testdbi_sources,
-    c_args : testunit_core_cc_flags,
+    c_args : testdbi_c_args,
     dependencies : [libdbi_dep, libcore_dep])
 
 test('dbi', testdbi_exe, is_parallel : false, suite: 'dbi')
