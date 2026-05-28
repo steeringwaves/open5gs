@@ -19,6 +19,9 @@
 
 #include "dbctl-subscriber.h"
 
+#include <string.h>
+#include <stdlib.h>
+
 /*
  * The JSON keys below are the literal values of the OGS_*_STRING macros from
  * lib/proto/types.h. The Phase-2 Redis reader
@@ -304,4 +307,126 @@ char *dbctl_build_change_payload(
     out = cJSON_PrintUnformatted(doc);
     cJSON_Delete(doc);
     return out;
+}
+
+/*
+ * If `node` is an Extended-JSON wrapper object (an object with EXACTLY ONE
+ * member whose key is a recognized "$..." marker), build and return the
+ * unwrapped primitive (a fresh cJSON the caller owns). Otherwise return NULL.
+ */
+static cJSON *unwrap_extended_json(const cJSON *node)
+{
+    cJSON *child;
+    const char *key;
+
+    if (!node || !cJSON_IsObject((cJSON *)node))
+        return NULL;
+
+    child = node->child;
+    if (!child || child->next)     /* must have exactly one member */
+        return NULL;
+
+    key = child->string;
+    if (!key)
+        return NULL;
+
+    if (!strcmp(key, "$numberLong") || !strcmp(key, "$numberInt")) {
+        /* Value is typically a string ("96"); occasionally a JSON number. */
+        if (cJSON_IsString(child) && child->valuestring) {
+            long long v = strtoll(child->valuestring, NULL, 10);
+            return cJSON_CreateNumber((double)v);
+        }
+        if (cJSON_IsNumber(child))
+            return cJSON_CreateNumber(child->valuedouble);
+        return NULL;
+    }
+
+    if (!strcmp(key, "$oid")) {
+        if (cJSON_IsString(child) && child->valuestring)
+            return cJSON_CreateString(child->valuestring);
+        return NULL;
+    }
+
+    if (!strcmp(key, "$date")) {
+        /* {"$date":<ms>} or {"$date":{"$numberLong":"<ms>"}} -> epoch-ms. */
+        if (cJSON_IsNumber(child))
+            return cJSON_CreateNumber(child->valuedouble);
+        if (cJSON_IsString(child) && child->valuestring) {
+            /* Numeric-looking string -> number; else keep as a string. */
+            char *end = NULL;
+            long long v = strtoll(child->valuestring, &end, 10);
+            if (end && *end == '\0' && end != child->valuestring)
+                return cJSON_CreateNumber((double)v);
+            return cJSON_CreateString(child->valuestring);
+        }
+        /* {"$date":{"$numberLong":"..."}} : recurse to unwrap the inner first. */
+        if (cJSON_IsObject(child)) {
+            cJSON *inner = unwrap_extended_json(child);
+            if (inner)
+                return inner;
+        }
+        return NULL;
+    }
+
+    return NULL;
+}
+
+void dbctl_canonicalize_extended_json(cJSON *node)
+{
+    if (!node)
+        return;
+
+    if (cJSON_IsObject((cJSON *)node)) {
+        cJSON *child, *next;
+
+        /*
+         * Walk the member chain. We may replace a child in place, so capture
+         * `next` (and the key) BEFORE replacing: cJSON_ReplaceItemInObject
+         * Case Sensitive frees the old child, which would dangle our cursor.
+         * The replacement primitive is a leaf, so there is nothing to recurse
+         * into afterwards; for non-wrapper children we recurse, then advance.
+         */
+        for (child = node->child; child != NULL; child = next) {
+            cJSON *unwrapped;
+
+            next = child->next;
+
+            unwrapped = unwrap_extended_json(child);
+            if (unwrapped) {
+                /* child->string is the member key; replace by that key. */
+                cJSON_ReplaceItemInObjectCaseSensitive(
+                        node, child->string, unwrapped);
+                continue;
+            }
+
+            /* Not a wrapper: recurse into nested objects/arrays. */
+            if (cJSON_IsObject(child) || cJSON_IsArray(child))
+                dbctl_canonicalize_extended_json(child);
+        }
+        return;
+    }
+
+    if (cJSON_IsArray((cJSON *)node)) {
+        int i, n = cJSON_GetArraySize(node);
+
+        /*
+         * Index-based iteration: cJSON_ReplaceItemInArray frees the old element
+         * and splices the new one at the same index, so the size and ordering
+         * are preserved and `i` stays valid.
+         */
+        for (i = 0; i < n; i++) {
+            cJSON *elem = cJSON_GetArrayItem(node, i);
+            cJSON *unwrapped = unwrap_extended_json(elem);
+
+            if (unwrapped) {
+                cJSON_ReplaceItemInArray(node, i, unwrapped);
+                continue;
+            }
+            if (cJSON_IsObject(elem) || cJSON_IsArray(elem))
+                dbctl_canonicalize_extended_json(elem);
+        }
+        return;
+    }
+
+    /* Scalars: nothing to do. */
 }

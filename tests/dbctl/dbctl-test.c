@@ -296,6 +296,65 @@ static void test_build_change_payload(abts_case *tc, void *data)
     ABTS_PTR_EQUAL(tc, NULL, json);
 }
 
+/*
+ * The MongoDB Extended-JSON canonicalizer. mongoexport emits wrappers like
+ * {"$numberLong":"96"}, {"$oid":"66b..."}, {"$numberInt":"5"} and
+ * {"$date":...}; dbctl_canonicalize_extended_json() unwraps them in place so
+ * the Phase-2 reader (which expects plain JSON) reads the imported docs. Here
+ * we assert the unwrap works recursively (objects, nested objects, arrays).
+ */
+static void test_canonicalize_extended_json(abts_case *tc, void *data)
+{
+    cJSON *doc, *security, *sqn, *id, *n, *nested, *nested0, *v;
+
+    doc = cJSON_Parse(
+        "{"
+            "\"imsi\":\"001010000000001\","
+            "\"security\":{\"sqn\":{\"$numberLong\":\"96\"}},"
+            "\"_id\":{\"$oid\":\"66b0000000000000000000aa\"},"
+            "\"n\":{\"$numberInt\":\"5\"},"
+            "\"nested\":[{\"v\":{\"$numberLong\":\"7\"}}]"
+        "}");
+    ABTS_PTR_NOTNULL(tc, doc);
+
+    dbctl_canonicalize_extended_json(doc);
+
+    /* security.sqn is now a plain number == 96 */
+    security = cJSON_GetObjectItemCaseSensitive(doc, "security");
+    ABTS_PTR_NOTNULL(tc, security);
+    ABTS_TRUE(tc, cJSON_IsObject(security));
+    sqn = cJSON_GetObjectItemCaseSensitive(security, "sqn");
+    ABTS_PTR_NOTNULL(tc, sqn);
+    ABTS_TRUE(tc, cJSON_IsNumber(sqn));
+    ABTS_INT_EQUAL(tc, 96, (int)cJSON_GetNumberValue(sqn));
+
+    /* _id is unwrapped from {$oid} to its plain string */
+    id = cJSON_GetObjectItemCaseSensitive(doc, "_id");
+    ABTS_PTR_NOTNULL(tc, id);
+    ABTS_TRUE(tc, cJSON_IsString(id));
+    ABTS_STR_EQUAL(tc, "66b0000000000000000000aa", id->valuestring);
+
+    /* n is unwrapped from {$numberInt} to a plain number == 5 */
+    n = cJSON_GetObjectItemCaseSensitive(doc, "n");
+    ABTS_PTR_NOTNULL(tc, n);
+    ABTS_TRUE(tc, cJSON_IsNumber(n));
+    ABTS_INT_EQUAL(tc, 5, (int)cJSON_GetNumberValue(n));
+
+    /* nested[0].v is unwrapped inside an array element == 7 */
+    nested = cJSON_GetObjectItemCaseSensitive(doc, "nested");
+    ABTS_PTR_NOTNULL(tc, nested);
+    ABTS_TRUE(tc, cJSON_IsArray(nested));
+    ABTS_INT_EQUAL(tc, 1, cJSON_GetArraySize(nested));
+    nested0 = cJSON_GetArrayItem(nested, 0);
+    ABTS_PTR_NOTNULL(tc, nested0);
+    v = cJSON_GetObjectItemCaseSensitive(nested0, "v");
+    ABTS_PTR_NOTNULL(tc, v);
+    ABTS_TRUE(tc, cJSON_IsNumber(v));
+    ABTS_INT_EQUAL(tc, 7, (int)cJSON_GetNumberValue(v));
+
+    cJSON_Delete(doc);
+}
+
 abts_suite *test_dbctl_subscriber(abts_suite *suite)
 {
     suite = ADD_SUITE(suite)
@@ -303,6 +362,7 @@ abts_suite *test_dbctl_subscriber(abts_suite *suite)
     abts_run_test(suite, test_build_subscriber, NULL);
     abts_run_test(suite, test_build_subscriber_op_sd_msisdn, NULL);
     abts_run_test(suite, test_build_change_payload, NULL);
+    abts_run_test(suite, test_canonicalize_extended_json, NULL);
 
     return suite;
 }

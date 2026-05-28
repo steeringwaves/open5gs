@@ -63,6 +63,24 @@ cJSON *dbctl_build_subscriber(const dbctl_add_args_t *a);
 const char *dbctl_subscriber_imsi(const cJSON *doc);
 
 /*
+ * Canonicalize MongoDB Extended JSON in place. mongoexport wraps non-JSON
+ * primitives in single-key objects; this recursively unwraps the common ones
+ * so the document becomes plain JSON the Phase-2 reader understands:
+ *
+ *   {"$numberLong":"96"}  -> 96      (number; string or numeric value)
+ *   {"$numberInt":"5"}    -> 5       (number; string or numeric value)
+ *   {"$oid":"66b..."}     -> "66b..." (string)
+ *   {"$date":<ms|{$nL}>}  -> <ms>    (number epoch-ms; best-effort otherwise)
+ *
+ * Any object that is NOT exactly one of these wrappers is left in place and its
+ * members are recursed into; array elements are recursed/unwrapped too. Unknown
+ * wrappers pass through untouched (the reader ignores fields like `_id`/dates).
+ *
+ * PURE: no Redis, no I/O. Mutates `node` (and its descendants) directly.
+ */
+void dbctl_canonicalize_extended_json(cJSON *node);
+
+/*
  * Build the JSON payload published to "<prefix>events:subscriber" for a
  * change event:  {"imsi":"<imsi>","fields":["ambr","slice",...]}
  *

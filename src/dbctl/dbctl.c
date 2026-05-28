@@ -88,13 +88,6 @@ static int cmd_ping(dbctl_redis_t *db)
     return rv;
 }
 
-/* A command that is recognized but not yet implemented in this task. */
-static int cmd_not_implemented(const char *name)
-{
-    ogs_error("'%s' is not implemented yet", name);
-    return OGS_ERROR;
-}
-
 /*
  * Per-command option set. getopt_long in the command handlers starts from
  * argv[optind] (the subcommand) so the subcommand itself becomes argv[0] of
@@ -602,6 +595,281 @@ cleanup:
     return rv;
 }
 
+/*
+ * Read the entire file at `path` into a NUL-terminated heap buffer. Returns the
+ * buffer (caller frees with ogs_free) and, when `len_out` is non-NULL, the byte
+ * length (excluding the terminator). Returns NULL on any error (logged).
+ */
+static char *read_whole_file(const char *path, size_t *len_out)
+{
+    FILE *fp;
+    long size;
+    size_t nread;
+    char *buf;
+
+    fp = fopen(path, "rb");
+    if (!fp) {
+        ogs_error("import: cannot open file [%s]: %s", path, strerror(errno));
+        return NULL;
+    }
+
+    if (fseek(fp, 0, SEEK_END) != 0 || (size = ftell(fp)) < 0 ||
+            fseek(fp, 0, SEEK_SET) != 0) {
+        ogs_error("import: cannot determine size of [%s]", path);
+        fclose(fp);
+        return NULL;
+    }
+
+    buf = ogs_malloc((size_t)size + 1);
+    if (!buf) {
+        ogs_error("import: out of memory reading [%s]", path);
+        fclose(fp);
+        return NULL;
+    }
+
+    nread = fread(buf, 1, (size_t)size, fp);
+    fclose(fp);
+
+    if (nread != (size_t)size) {
+        ogs_error("import: short read on [%s]", path);
+        ogs_free(buf);
+        return NULL;
+    }
+
+    buf[nread] = '\0';
+    if (len_out) *len_out = nread;
+    return buf;
+}
+
+/*
+ * Store one parsed (and to-be-canonicalized) subscriber document. Extracts the
+ * imsi, writes <prefix>subscriber:<imsi>, maintains the msisdn[] secondary
+ * index, and publishes a change event. Returns OGS_OK on a stored subscriber,
+ * OGS_RETRY when the doc has no imsi (skipped + warned), OGS_ERROR on failure.
+ */
+static int import_one(dbctl_redis_t *db, cJSON *doc)
+{
+    const char *imsi;
+    cJSON *msisdn_arr, *m;
+
+    dbctl_canonicalize_extended_json(doc);
+
+    imsi = dbctl_subscriber_imsi(doc);
+    if (!imsi || !imsi[0]) {
+        ogs_warn("import: skipping a document with no imsi");
+        return OGS_RETRY;
+    }
+
+    if (dbctl_redis_set_subscriber(db, imsi, doc) != OGS_OK) {
+        ogs_error("import: failed to store subscriber [%s]", imsi);
+        return OGS_ERROR;
+    }
+
+    msisdn_arr = cJSON_GetObjectItemCaseSensitive(doc, "msisdn");
+    if (msisdn_arr && cJSON_IsArray(msisdn_arr)) {
+        cJSON_ArrayForEach(m, msisdn_arr) {
+            if (cJSON_IsString(m) && m->valuestring && m->valuestring[0]) {
+                if (dbctl_redis_set_msisdn_index(db, m->valuestring, imsi)
+                        != OGS_OK)
+                    ogs_warn("import: failed to index msisdn [%s] for [%s]",
+                            m->valuestring, imsi);
+            }
+        }
+    }
+
+    /* Notify a running NF (refresh ALL fields) for inserts and overwrites. */
+    if (dbctl_redis_publish_change(db, imsi, NULL, 0) != OGS_OK)
+        ogs_warn("import: failed to publish change event for [%s]", imsi);
+
+    return OGS_OK;
+}
+
+static int cmd_import(dbctl_redis_t *db, int argc, char *argv[])
+{
+    const char *path = NULL;
+    char *buf = NULL, *p;
+    const char *first;
+    int c, count = 0, rv = OGS_ERROR;
+
+    optind = 1;
+    opterr = 0;
+    while ((c = getopt_long(argc, argv, "", cmd_long_options, NULL)) != -1) {
+        switch (c) {
+        case OPT_FILE: path = optarg; break;
+        default:
+            ogs_error("import: unknown or invalid option");
+            return OGS_ERROR;
+        }
+    }
+
+    if (!path) {
+        ogs_error("import: --file is required");
+        return OGS_ERROR;
+    }
+
+    buf = read_whole_file(path, NULL);
+    if (!buf)
+        return OGS_ERROR;
+
+    /* Detect format: first non-whitespace '[' => JSON array, else JSONL. */
+    first = buf;
+    while (*first && isspace((unsigned char)*first))
+        first++;
+
+    if (*first == '[') {
+        cJSON *array, *doc;
+
+        array = cJSON_Parse(buf);
+        if (!array || !cJSON_IsArray(array)) {
+            ogs_error("import: file does not parse as a JSON array [%s]", path);
+            if (array) cJSON_Delete(array);
+            goto cleanup;
+        }
+
+        cJSON_ArrayForEach(doc, array) {
+            int r = import_one(db, doc);
+            if (r == OGS_OK)
+                count++;
+            else if (r == OGS_ERROR) {
+                cJSON_Delete(array);
+                goto cleanup;
+            }
+            /* OGS_RETRY: skipped (no imsi), already warned. */
+        }
+        cJSON_Delete(array);
+    } else {
+        /* JSONL: one document per non-empty line. */
+        p = buf;
+        while (*p) {
+            char *nl = strchr(p, '\n');
+            cJSON *doc;
+            int r;
+
+            if (nl) *nl = '\0';
+
+            /* Skip blank / whitespace-only lines. */
+            {
+                char *s = p;
+                while (*s && isspace((unsigned char)*s))
+                    s++;
+                if (*s == '\0') {
+                    if (!nl) break;
+                    p = nl + 1;
+                    continue;
+                }
+            }
+
+            doc = cJSON_Parse(p);
+            if (!doc) {
+                ogs_error("import: malformed JSON line in [%s]", path);
+                goto cleanup;
+            }
+
+            r = import_one(db, doc);
+            cJSON_Delete(doc);
+            if (r == OGS_OK)
+                count++;
+            else if (r == OGS_ERROR)
+                goto cleanup;
+            /* OGS_RETRY: skipped (no imsi), already warned. */
+
+            if (!nl) break;
+            p = nl + 1;
+        }
+    }
+
+    printf("imported %d subscribers\n", count);
+    rv = OGS_OK;
+
+cleanup:
+    if (buf) ogs_free(buf);
+    return rv;
+}
+
+/* Per-imsi export context: the file we write to and a running count. */
+typedef struct export_ctx_s {
+    dbctl_redis_t *db;
+    FILE *fp;
+    int count;
+    int failed;
+} export_ctx_t;
+
+static void export_one(const char *imsi, void *data)
+{
+    export_ctx_t *ctx = data;
+    char *json;
+
+    if (ctx->failed)
+        return;
+
+    /* Write the RAW stored JSON verbatim as one JSONL line. */
+    json = dbctl_redis_get(ctx->db, "subscriber", imsi);
+    if (!json) {
+        ogs_warn("export: subscriber [%s] vanished during export", imsi);
+        return;
+    }
+
+    if (fprintf(ctx->fp, "%s\n", json) < 0) {
+        ogs_error("export: write failed for [%s]", imsi);
+        ctx->failed = 1;
+    } else {
+        ctx->count++;
+    }
+
+    ogs_free(json);
+}
+
+static int cmd_export(dbctl_redis_t *db, int argc, char *argv[])
+{
+    const char *path = NULL;
+    export_ctx_t ctx;
+    int c, n, rv = OGS_ERROR;
+
+    optind = 1;
+    opterr = 0;
+    while ((c = getopt_long(argc, argv, "", cmd_long_options, NULL)) != -1) {
+        switch (c) {
+        case OPT_FILE: path = optarg; break;
+        default:
+            ogs_error("export: unknown or invalid option");
+            return OGS_ERROR;
+        }
+    }
+
+    if (!path) {
+        ogs_error("export: --file is required");
+        return OGS_ERROR;
+    }
+
+    memset(&ctx, 0, sizeof(ctx));
+    ctx.db = db;
+    ctx.fp = fopen(path, "wb");
+    if (!ctx.fp) {
+        ogs_error("export: cannot open file [%s]: %s", path, strerror(errno));
+        return OGS_ERROR;
+    }
+
+    n = dbctl_redis_scan_imsis(db, export_one, &ctx, 0);
+    if (n < 0) {
+        ogs_error("export: SCAN failed");
+        goto cleanup;
+    }
+    if (ctx.failed)
+        goto cleanup;
+
+    printf("exported %d subscribers\n", ctx.count);
+    rv = OGS_OK;
+
+cleanup:
+    if (ctx.fp) {
+        if (fclose(ctx.fp) != 0 && rv == OGS_OK) {
+            ogs_error("export: error closing [%s]", path);
+            rv = OGS_ERROR;
+        }
+    }
+    return rv;
+}
+
 int main(int argc, char *argv[])
 {
     int rv = EXIT_FAILURE;
@@ -705,9 +973,11 @@ int main(int argc, char *argv[])
         } else if (!strcmp(cmd, "reset-sqn")) {
             rv = (cmd_reset_sqn(&db, cmd_argc, cmd_argv) == OGS_OK) ?
                     EXIT_SUCCESS : EXIT_FAILURE;
-        } else if (!strcmp(cmd, "import") ||
-                   !strcmp(cmd, "export")) {
-            rv = (cmd_not_implemented(cmd) == OGS_OK) ?
+        } else if (!strcmp(cmd, "import")) {
+            rv = (cmd_import(&db, cmd_argc, cmd_argv) == OGS_OK) ?
+                    EXIT_SUCCESS : EXIT_FAILURE;
+        } else if (!strcmp(cmd, "export")) {
+            rv = (cmd_export(&db, cmd_argc, cmd_argv) == OGS_OK) ?
                     EXIT_SUCCESS : EXIT_FAILURE;
         } else {
             ogs_error("Unknown command: %s", cmd);
