@@ -21,6 +21,7 @@
 open5gs_dbctl_redis_sources = files('''
     dbctl.c
     dbctl-redis.c
+    dbctl-subscriber.c
 '''.split()) + files('../../lib/dbi/redis/cJSON.c')
 
 executable('open5gs-dbctl-redis',

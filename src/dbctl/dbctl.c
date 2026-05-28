@@ -19,6 +19,7 @@
 
 #include "ogs-core.h"
 #include "dbctl-redis.h"
+#include "dbctl-subscriber.h"
 
 #include <getopt.h>
 
@@ -92,6 +93,189 @@ static int cmd_not_implemented(const char *name)
 {
     ogs_error("'%s' is not implemented yet", name);
     return OGS_ERROR;
+}
+
+/*
+ * Per-command option set. getopt_long in the command handlers starts from
+ * argv[optind] (the subcommand) so the subcommand itself becomes argv[0] of
+ * the sub-parse and is skipped.
+ */
+enum {
+    OPT_IMSI = 256, OPT_KEY, OPT_OPC, OPT_OP, OPT_AMF, OPT_RAND,
+    OPT_APN, OPT_SST, OPT_SD, OPT_MSISDN, OPT_LIMIT, OPT_VALUE, OPT_FILE
+};
+
+static const struct option cmd_long_options[] = {
+    { "imsi",   required_argument, NULL, OPT_IMSI },
+    { "key",    required_argument, NULL, OPT_KEY },
+    { "opc",    required_argument, NULL, OPT_OPC },
+    { "op",     required_argument, NULL, OPT_OP },
+    { "amf",    required_argument, NULL, OPT_AMF },
+    { "rand",   required_argument, NULL, OPT_RAND },
+    { "apn",    required_argument, NULL, OPT_APN },
+    { "sst",    required_argument, NULL, OPT_SST },
+    { "sd",     required_argument, NULL, OPT_SD },
+    { "msisdn", required_argument, NULL, OPT_MSISDN },
+    { "limit",  required_argument, NULL, OPT_LIMIT },
+    { "value",  required_argument, NULL, OPT_VALUE },
+    { "file",   required_argument, NULL, OPT_FILE },
+    { NULL,     0,                 NULL, 0 }
+};
+
+static int cmd_add(dbctl_redis_t *db, int argc, char *argv[])
+{
+    dbctl_add_args_t args;
+    cJSON *doc;
+    int c, have_opc = 0, have_op = 0;
+    int rv = OGS_ERROR;
+
+    memset(&args, 0, sizeof(args));
+
+    optind = 1;
+    opterr = 0;
+    while ((c = getopt_long(argc, argv, "", cmd_long_options, NULL)) != -1) {
+        switch (c) {
+        case OPT_IMSI:   args.imsi = optarg; break;
+        case OPT_KEY:    args.k = optarg; break;
+        case OPT_OPC:    args.opc = optarg; have_opc = 1; break;
+        case OPT_OP:     args.op = optarg; have_op = 1; break;
+        case OPT_AMF:    args.amf = optarg; break;
+        case OPT_RAND:   args.rand = optarg; break;
+        case OPT_APN:    args.apn = optarg; break;
+        case OPT_SST:    args.sst = atoi(optarg); break;
+        case OPT_SD:     args.sd = optarg; args.has_sd = 1; break;
+        case OPT_MSISDN: args.msisdn = optarg; break;
+        default:
+            ogs_error("add: unknown or invalid option");
+            return OGS_ERROR;
+        }
+    }
+
+    if (!args.imsi) {
+        ogs_error("add: --imsi is required");
+        return OGS_ERROR;
+    }
+    if (!args.k) {
+        ogs_error("add: --key is required");
+        return OGS_ERROR;
+    }
+    if (have_opc && have_op) {
+        ogs_error("add: use only one of --opc / --op");
+        return OGS_ERROR;
+    }
+    if (!have_opc && !have_op) {
+        ogs_error("add: one of --opc / --op is required");
+        return OGS_ERROR;
+    }
+    args.use_opc = have_opc;
+
+    doc = dbctl_build_subscriber(&args);
+    if (!doc) {
+        ogs_error("add: failed to build subscriber document");
+        return OGS_ERROR;
+    }
+
+    if (dbctl_redis_set_subscriber(db, args.imsi, doc) != OGS_OK) {
+        ogs_error("add: failed to store subscriber [%s]", args.imsi);
+        goto cleanup;
+    }
+
+    if (args.msisdn) {
+        if (dbctl_redis_set_msisdn_index(db, args.msisdn, args.imsi)
+                != OGS_OK) {
+            ogs_error("add: failed to index msisdn [%s]", args.msisdn);
+            goto cleanup;
+        }
+    }
+
+    printf("Added subscriber %s\n", args.imsi);
+    rv = OGS_OK;
+
+cleanup:
+    cJSON_Delete(doc);
+    return rv;
+}
+
+static int cmd_show(dbctl_redis_t *db, int argc, char *argv[])
+{
+    const char *imsi = NULL;
+    char *json = NULL, *pretty = NULL;
+    cJSON *doc = NULL;
+    int c, rv = OGS_ERROR;
+
+    optind = 1;
+    opterr = 0;
+    while ((c = getopt_long(argc, argv, "", cmd_long_options, NULL)) != -1) {
+        switch (c) {
+        case OPT_IMSI: imsi = optarg; break;
+        default:
+            ogs_error("show: unknown or invalid option");
+            return OGS_ERROR;
+        }
+    }
+
+    if (!imsi) {
+        ogs_error("show: --imsi is required");
+        return OGS_ERROR;
+    }
+
+    json = dbctl_redis_get(db, "subscriber", imsi);
+    if (!json) {
+        ogs_error("show: no such subscriber [%s]", imsi);
+        return OGS_ERROR;
+    }
+
+    doc = cJSON_Parse(json);
+    if (!doc) {
+        ogs_error("show: malformed subscriber JSON [%s]", imsi);
+        goto cleanup;
+    }
+
+    pretty = cJSON_Print(doc);
+    if (!pretty) {
+        ogs_error("show: failed to format subscriber [%s]", imsi);
+        goto cleanup;
+    }
+
+    printf("%s\n", pretty);
+    rv = OGS_OK;
+
+cleanup:
+    if (pretty) cJSON_free(pretty);
+    if (doc) cJSON_Delete(doc);
+    if (json) ogs_free(json);
+    return rv;
+}
+
+static void list_print_imsi(const char *imsi, void *data)
+{
+    (void)data;
+    printf("%s\n", imsi);
+}
+
+static int cmd_list(dbctl_redis_t *db, int argc, char *argv[])
+{
+    int limit = 0;
+    int c, n;
+
+    optind = 1;
+    opterr = 0;
+    while ((c = getopt_long(argc, argv, "", cmd_long_options, NULL)) != -1) {
+        switch (c) {
+        case OPT_LIMIT: limit = atoi(optarg); break;
+        default:
+            ogs_error("list: unknown or invalid option");
+            return OGS_ERROR;
+        }
+    }
+
+    n = dbctl_redis_scan_imsis(db, list_print_imsi, NULL, limit);
+    if (n < 0) {
+        ogs_error("list: SCAN failed");
+        return OGS_ERROR;
+    }
+
+    return OGS_OK;
 }
 
 int main(int argc, char *argv[])
@@ -169,23 +353,35 @@ int main(int argc, char *argv[])
     }
     connected = 1;
 
-    if (!strcmp(cmd, "ping")) {
-        rv = (cmd_ping(&db) == OGS_OK) ? EXIT_SUCCESS : EXIT_FAILURE;
-    } else if (!strcmp(cmd, "add") ||
-               !strcmp(cmd, "del") ||
-               !strcmp(cmd, "show") ||
-               !strcmp(cmd, "list") ||
-               !strcmp(cmd, "import") ||
-               !strcmp(cmd, "export") ||
-               !strcmp(cmd, "msisdn-add") ||
-               !strcmp(cmd, "msisdn-del") ||
-               !strcmp(cmd, "reset-sqn")) {
-        rv = (cmd_not_implemented(cmd) == OGS_OK) ?
-                EXIT_SUCCESS : EXIT_FAILURE;
-    } else {
-        ogs_error("Unknown command: %s", cmd);
-        usage(stderr);
-        rv = EXIT_FAILURE;
+    {
+        /* The command handlers re-parse flags starting at the subcommand. */
+        int cmd_argc = argc - optind;
+        char **cmd_argv = &argv[optind];
+
+        if (!strcmp(cmd, "ping")) {
+            rv = (cmd_ping(&db) == OGS_OK) ? EXIT_SUCCESS : EXIT_FAILURE;
+        } else if (!strcmp(cmd, "add")) {
+            rv = (cmd_add(&db, cmd_argc, cmd_argv) == OGS_OK) ?
+                    EXIT_SUCCESS : EXIT_FAILURE;
+        } else if (!strcmp(cmd, "show")) {
+            rv = (cmd_show(&db, cmd_argc, cmd_argv) == OGS_OK) ?
+                    EXIT_SUCCESS : EXIT_FAILURE;
+        } else if (!strcmp(cmd, "list")) {
+            rv = (cmd_list(&db, cmd_argc, cmd_argv) == OGS_OK) ?
+                    EXIT_SUCCESS : EXIT_FAILURE;
+        } else if (!strcmp(cmd, "del") ||
+                   !strcmp(cmd, "import") ||
+                   !strcmp(cmd, "export") ||
+                   !strcmp(cmd, "msisdn-add") ||
+                   !strcmp(cmd, "msisdn-del") ||
+                   !strcmp(cmd, "reset-sqn")) {
+            rv = (cmd_not_implemented(cmd) == OGS_OK) ?
+                    EXIT_SUCCESS : EXIT_FAILURE;
+        } else {
+            ogs_error("Unknown command: %s", cmd);
+            usage(stderr);
+            rv = EXIT_FAILURE;
+        }
     }
 
 cleanup:

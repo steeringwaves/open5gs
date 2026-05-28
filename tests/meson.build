@@ -24,6 +24,12 @@ subdir('unit')
 subdir('dbi')
 subdir('af')
 
+# The open5gs-dbctl-redis CLI unit tests compile the CLI's pure source plus the
+# vendored cJSON; they are gated on hiredis to match the tool's build gate.
+if libhiredis_dep.found()
+    subdir('dbctl')
+endif
+
 # The integration tests below provision subscribers into MongoDB via BSON
 # (tests/common, and the libtestepc/libtest5gc aggregates in tests/app).
 # They are built only when the MongoDB backend is enabled; a Redis-only

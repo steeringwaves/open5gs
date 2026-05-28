@@ -64,6 +64,31 @@ void dbctl_redis_close(dbctl_redis_t *self);
 char *dbctl_redis_key(const dbctl_redis_t *self,
         const char *kind, const char *id);
 
+/*
+ * SET <prefix>subscriber:<imsi> <cJSON_PrintUnformatted(doc)>.
+ * Does not take ownership of doc. Returns OGS_OK / OGS_ERROR.
+ */
+int dbctl_redis_set_subscriber(dbctl_redis_t *self,
+        const char *imsi, const cJSON *doc);
+
+/*
+ * GET <prefix><kind>:<id>. Returns an ogs_strdup'd value the caller frees with
+ * ogs_free(), or NULL if the key is absent or on error.
+ */
+char *dbctl_redis_get(dbctl_redis_t *self, const char *kind, const char *id);
+
+/* SET <prefix>msisdn:<bcd> <imsi>. Returns OGS_OK / OGS_ERROR. */
+int dbctl_redis_set_msisdn_index(dbctl_redis_t *self,
+        const char *msisdn, const char *imsi);
+
+/*
+ * SCAN MATCH <prefix>subscriber:* and invoke cb(imsi, data) for each imsi
+ * (key prefix stripped). If limit > 0, stop after `limit` callbacks. Returns
+ * the number of imsis visited, or a negative value on error.
+ */
+int dbctl_redis_scan_imsis(dbctl_redis_t *self,
+        void (*cb)(const char *imsi, void *data), void *data, int limit);
+
 #ifdef __cplusplus
 }
 #endif

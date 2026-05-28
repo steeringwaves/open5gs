@@ -154,3 +154,156 @@ char *dbctl_redis_key(const dbctl_redis_t *self,
     ogs_assert(key);
     return key;
 }
+
+int dbctl_redis_set_subscriber(dbctl_redis_t *self,
+        const char *imsi, const cJSON *doc)
+{
+    char *key, *json;
+    redisReply *reply;
+    int rv = OGS_ERROR;
+
+    ogs_assert(self);
+    ogs_assert(imsi);
+    ogs_assert(doc);
+
+    json = cJSON_PrintUnformatted((cJSON *)doc);
+    if (!json) {
+        ogs_error("Failed to serialize subscriber [%s]", imsi);
+        return OGS_ERROR;
+    }
+
+    key = dbctl_redis_key(self, "subscriber", imsi);
+
+    reply = redisCommand(self->ctx, "SET %s %s", key, json);
+    if (reply == NULL) {
+        ogs_error("SET %s failed: %s", key, self->ctx->errstr);
+    } else if (reply->type == REDIS_REPLY_ERROR) {
+        ogs_error("SET %s error: %s", key, reply->str);
+    } else {
+        rv = OGS_OK;
+    }
+
+    if (reply) freeReplyObject(reply);
+    ogs_free(key);
+    cJSON_free(json);
+    return rv;
+}
+
+char *dbctl_redis_get(dbctl_redis_t *self, const char *kind, const char *id)
+{
+    char *key, *value = NULL;
+    redisReply *reply;
+
+    ogs_assert(self);
+    ogs_assert(kind);
+    ogs_assert(id);
+
+    key = dbctl_redis_key(self, kind, id);
+
+    reply = redisCommand(self->ctx, "GET %s", key);
+    if (reply == NULL) {
+        ogs_error("GET %s failed: %s", key, self->ctx->errstr);
+    } else if (reply->type == REDIS_REPLY_STRING) {
+        value = ogs_strdup(reply->str);
+        ogs_assert(value);
+    } else if (reply->type == REDIS_REPLY_ERROR) {
+        ogs_error("GET %s error: %s", key, reply->str);
+    }
+    /* REDIS_REPLY_NIL (key absent) -> value stays NULL, no error logged */
+
+    if (reply) freeReplyObject(reply);
+    ogs_free(key);
+    return value;
+}
+
+int dbctl_redis_set_msisdn_index(dbctl_redis_t *self,
+        const char *msisdn, const char *imsi)
+{
+    char *key;
+    redisReply *reply;
+    int rv = OGS_ERROR;
+
+    ogs_assert(self);
+    ogs_assert(msisdn);
+    ogs_assert(imsi);
+
+    key = dbctl_redis_key(self, "msisdn", msisdn);
+
+    reply = redisCommand(self->ctx, "SET %s %s", key, imsi);
+    if (reply == NULL) {
+        ogs_error("SET %s failed: %s", key, self->ctx->errstr);
+    } else if (reply->type == REDIS_REPLY_ERROR) {
+        ogs_error("SET %s error: %s", key, reply->str);
+    } else {
+        rv = OGS_OK;
+    }
+
+    if (reply) freeReplyObject(reply);
+    ogs_free(key);
+    return rv;
+}
+
+int dbctl_redis_scan_imsis(dbctl_redis_t *self,
+        void (*cb)(const char *imsi, void *data), void *data, int limit)
+{
+    char *match;
+    size_t prefix_len;
+    unsigned long long cursor = 0;
+    int count = 0;
+
+    ogs_assert(self);
+    ogs_assert(cb);
+
+    match = ogs_msprintf("%ssubscriber:*", self->prefix);
+    ogs_assert(match);
+    /* the imsi is everything after "<prefix>subscriber:" */
+    prefix_len = strlen(self->prefix) + strlen("subscriber:");
+
+    do {
+        redisReply *reply, *keys;
+        size_t i;
+
+        reply = redisCommand(self->ctx,
+                "SCAN %llu MATCH %s COUNT 100", cursor, match);
+        if (reply == NULL) {
+            ogs_error("SCAN failed: %s", self->ctx->errstr);
+            ogs_free(match);
+            return OGS_ERROR;
+        }
+        if (reply->type == REDIS_REPLY_ERROR) {
+            ogs_error("SCAN error: %s", reply->str);
+            freeReplyObject(reply);
+            ogs_free(match);
+            return OGS_ERROR;
+        }
+        if (reply->type != REDIS_REPLY_ARRAY || reply->elements != 2) {
+            ogs_error("SCAN returned an unexpected reply");
+            freeReplyObject(reply);
+            ogs_free(match);
+            return OGS_ERROR;
+        }
+
+        cursor = strtoull(reply->element[0]->str, NULL, 10);
+        keys = reply->element[1];
+
+        for (i = 0; i < keys->elements; i++) {
+            const char *key = keys->element[i]->str;
+            if (!key)
+                continue;
+            if (strlen(key) <= prefix_len)
+                continue;   /* not actually "<prefix>subscriber:<imsi>" */
+            cb(key + prefix_len, data);
+            count++;
+            if (limit > 0 && count >= limit) {
+                freeReplyObject(reply);
+                ogs_free(match);
+                return count;
+            }
+        }
+
+        freeReplyObject(reply);
+    } while (cursor != 0);
+
+    ogs_free(match);
+    return count;
+}
