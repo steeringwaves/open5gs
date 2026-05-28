@@ -17,7 +17,15 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
+/*
+ * The Docker-gated integration case below drives the Redis backend through the
+ * public ogs_dbi_* API to cross-check what the open5gs-dbctl-redis CLI wrote.
+ * OGS_DBI_COMPILATION unlocks the backend-internal declarations (mirrors
+ * tests/dbi/redis-equivalence-test.c); it must be defined before ogs-dbi.h.
+ */
+#define OGS_DBI_COMPILATION
 #include "ogs-core.h"
+#include "ogs-dbi.h"
 #include "core/abts.h"
 
 #include "cJSON.h"
@@ -355,6 +363,84 @@ static void test_canonicalize_extended_json(abts_case *tc, void *data)
     cJSON_Delete(doc);
 }
 
+/*
+ * ---------------------------------------------------------------------------
+ * Docker-gated CLI<->backend cross-check (the key integration test).
+ *
+ * The companion runner tests/dbctl/run.sh spins up redis:7-alpine, runs
+ *   open5gs-dbctl-redis ... add --imsi 001010000000001 --key 465B... --opc ...
+ *       --apn internet --sst 1 --msisdn 491725670000
+ * then exports OGS_TEST_REDIS_URI=redis://127.0.0.1:<port>/?prefix=test: and
+ * runs this suite. This case `ogs_dbi_init`s the SAME Redis/prefix and reads the
+ * subscriber back through the public ogs_dbi_* API, asserting the data matches
+ * exactly what the CLI's `add` wrote. That proves CLI-writes == NF-reads, which
+ * is the highest-value guard against key/shape drift between the tool and the
+ * backend reader.
+ *
+ * Gated on OGS_TEST_REDIS_URI: when unset/empty the case skips cleanly (ABTS
+ * pass), so `meson test --suite dbctl` stays green without Docker/Redis.
+ * ---------------------------------------------------------------------------
+ */
+#define IT_SUPI   "imsi-001010000000001"
+#define IT_IMSI   "001010000000001"
+
+static void test_cli_backend_readback(abts_case *tc, void *data)
+{
+    const char *uri = getenv("OGS_TEST_REDIS_URI");
+    ogs_dbi_auth_info_t auth;
+    ogs_subscription_data_t subscription_data;
+    int rv;
+
+    if (!uri || uri[0] == '\0') {
+        ogs_info("dbctl CLI<->backend read-back test skipped: "
+                "set OGS_TEST_REDIS_URI to run (tests/dbctl/run.sh does this)");
+        ABTS_TRUE(tc, 1);
+        return;
+    }
+
+    ogs_info("dbctl CLI<->backend read-back test running against %s", uri);
+
+    rv = ogs_dbi_init(uri);
+    ABTS_INT_EQUAL(tc, OGS_OK, rv);
+    if (rv != OGS_OK) {
+        ogs_error("ogs_dbi_init(%s) failed; is Redis reachable?", uri);
+        return;
+    }
+
+    /*
+     * Read 1 (auth_info): the CLI `add --key 465B... --opc ...` must surface as
+     * k[0]==0x46 and use_opc==1. A freshly-added subscriber starts at sqn 0.
+     */
+    memset(&auth, 0, sizeof(auth));
+    rv = ogs_dbi_auth_info(IT_SUPI, &auth);
+    ABTS_INT_EQUAL(tc, OGS_OK, rv);
+    ABTS_INT_EQUAL(tc, 0x46, auth.k[0]);
+    ABTS_INT_EQUAL(tc, 1, auth.use_opc);
+    ABTS_TRUE(tc, auth.sqn == 0);
+
+    /*
+     * Read 2 (subscription_data): the CLI `add --apn internet --sst 1` must
+     * surface as one slice / one session "internet" with the webui-default
+     * qos.index 9 — exactly the shape dbctl_build_subscriber emits.
+     */
+    memset(&subscription_data, 0, sizeof(subscription_data));
+    rv = ogs_dbi_subscription_data(IT_SUPI, &subscription_data);
+    ABTS_INT_EQUAL(tc, OGS_OK, rv);
+    ABTS_TRUE(tc, subscription_data.num_of_slice >= 1);
+    if (subscription_data.num_of_slice >= 1) {
+        ABTS_INT_EQUAL(tc, 1, subscription_data.slice[0].s_nssai.sst);
+        ABTS_TRUE(tc, subscription_data.slice[0].num_of_session >= 1);
+        ABTS_PTR_NOTNULL(tc, subscription_data.slice[0].session[0].name);
+        ABTS_STR_EQUAL(tc, "internet",
+                subscription_data.slice[0].session[0].name);
+        ABTS_INT_EQUAL(tc, 9,
+                subscription_data.slice[0].session[0].qos.index);
+    }
+    ogs_subscription_data_free(&subscription_data);
+
+    ogs_dbi_final();
+}
+
 abts_suite *test_dbctl_subscriber(abts_suite *suite)
 {
     suite = ADD_SUITE(suite)
@@ -363,6 +449,7 @@ abts_suite *test_dbctl_subscriber(abts_suite *suite)
     abts_run_test(suite, test_build_subscriber_op_sd_msisdn, NULL);
     abts_run_test(suite, test_build_change_payload, NULL);
     abts_run_test(suite, test_canonicalize_extended_json, NULL);
+    abts_run_test(suite, test_cli_backend_readback, NULL);
 
     return suite;
 }

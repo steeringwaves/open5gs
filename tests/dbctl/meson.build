@@ -15,10 +15,13 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-# Unit tests for the open5gs-dbctl-redis pure functions. They compile the
-# CLI's pure source (dbctl-subscriber.c) together with the vendored cJSON, so
-# the suite needs neither libdbi nor a live Redis. Built only when hiredis is
-# found, matching the tool's build gate.
+# Tests for the open5gs-dbctl-redis tool. They compile the CLI's pure source
+# (dbctl-subscriber.c) together with the vendored cJSON for the PURE-function
+# unit tests, which need neither libdbi nor a live Redis. The Docker-gated
+# integration case in dbctl-test.c additionally drives the redis backend through
+# the public ogs_dbi_* API to prove CLI-writes == NF-reads, so the suite also
+# links libdbi_dep (in scope from tests/). Built only when hiredis is found,
+# matching the tool's build gate.
 testdbctl_sources = files('''
     abts-main.c
     dbctl-test.c
@@ -29,7 +32,8 @@ testdbctl_exe = executable('dbctl-tests',
     sources : testdbctl_sources,
     c_args : testunit_core_cc_flags,
     include_directories : [include_directories('../../src/dbctl'),
+                           include_directories('../../lib/dbi'),
                            include_directories('../../lib/dbi/redis')],
-    dependencies : [libcore_dep])
+    dependencies : [libdbi_dep, libcore_dep])
 
 test('dbctl', testdbctl_exe, is_parallel : false, suite: 'dbctl')

@@ -18,6 +18,15 @@
  */
 
 #include "ogs-core.h"
+/*
+ * The Docker-gated integration case in dbctl-test.c includes ogs-dbi.h, which
+ * redefines OGS_LOG_DOMAIN to the dbi library's __ogs_dbi_domain. Its ogs_info()/
+ * ogs_error() (and those inside ogs_dbi_*) therefore log under that domain.
+ * ogs_log_vprintf() aborts if a domain id has no installed domain, so install
+ * __ogs_dbi_domain here up front (mirrors tests/dbi/abts-main.c). The pure-
+ * function unit tests do not log, so this is harmless for the no-Redis path.
+ */
+#include "ogs-dbi.h"
 #include "core/abts.h"
 
 abts_suite *test_dbctl_subscriber(abts_suite *suite);
@@ -36,6 +45,8 @@ int main(int argc, const char *const *argv)
 
     ogs_core_initialize();
     atexit(ogs_core_terminate);
+
+    ogs_log_install_domain(&__ogs_dbi_domain, "dbi", OGS_LOG_INFO);
 
     for (i = 0; alltests[i].func; i++)
         suite = alltests[i].func(suite);
