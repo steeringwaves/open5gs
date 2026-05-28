@@ -57,6 +57,16 @@ ogs_dbi_change_event_t *ogs_dbi_change_event_alloc(
         const char *imsi_bcd, uint32_t updated_fields_mask);
 void ogs_dbi_change_event_free(ogs_dbi_change_event_t *e);
 
+/*
+ * Change-event delivery. A consumer (e.g. HSS) registers a handler; the
+ * active backend's poll loop produces ogs_dbi_change_event_t records and
+ * the dbi core hands each to the handler. The handler takes ownership of
+ * the event and must free it (via ogs_dbi_change_event_free) when done.
+ */
+typedef void (*ogs_dbi_change_handler_f)(
+        ogs_dbi_change_event_t *event, void *data);
+void ogs_dbi_set_change_handler(ogs_dbi_change_handler_f handler, void *data);
+
 #ifdef __cplusplus
 }
 #endif

@@ -32,9 +32,8 @@ void hss_state_initial(ogs_fsm_t *s, hss_event_t *e)
 
     ogs_assert(s);
 
-#if MONGOC_CHECK_VERSION(1, 9, 0)
     if (hss_self()->use_mongodb_change_stream) {
-        ogs_dbi_collection_watch_init();
+        hss_db_watch_init();
 
         t_db_polling = ogs_timer_add(ogs_app()->timer_mgr,
                 hss_timer_dbi_poll_change_stream, 0);
@@ -43,7 +42,6 @@ void hss_state_initial(ogs_fsm_t *s, hss_event_t *e)
 
         OGS_FSM_TRAN(s, &hss_state_operational);
     }
-#endif
 }
 
 void hss_state_final(ogs_fsm_t *s, hss_event_t *e)
@@ -90,10 +88,12 @@ void hss_state_operational(ogs_fsm_t *s, hss_event_t *e)
     case HSS_EVENT_DBI_MESSAGE:
         ogs_assert(e);
 
-        ogs_assert(e->dbi.document);
-        hss_handle_change_event(e->dbi.document);
+        ogs_assert(e->dbi.change_event);
+        hss_handle_change_event(
+                (const ogs_dbi_change_event_t *)e->dbi.change_event);
 
-        bson_destroy(e->dbi.document);
+        ogs_dbi_change_event_free(
+                (ogs_dbi_change_event_t *)e->dbi.change_event);
         break;
 
     default:

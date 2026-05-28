@@ -72,6 +72,13 @@ const ogs_dbi_backend_t *ogs_dbi_backend_find(const char *scheme);
 /* The currently active backend, set by ogs_dbi_init(). NULL before init. */
 const ogs_dbi_backend_t *ogs_dbi_current_backend(void);
 
+/*
+ * Called by a backend's poll loop to deliver a change event. Hands the
+ * event to the registered handler (which takes ownership); if no handler
+ * is registered, frees the event.
+ */
+void ogs_dbi_dispatch_change_event(ogs_dbi_change_event_t *event);
+
 #ifdef __cplusplus
 }
 #endif

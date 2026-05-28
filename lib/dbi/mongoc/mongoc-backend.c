@@ -176,12 +176,3 @@ ogs_mongoc_t *ogs_mongoc(void)
 {
     return &self;
 }
-
-/* ---- TEMPORARY STUBS — replaced as later tasks move the real code in.
- * The read/write implementations now live in mongoc-{subscription,session,
- * ims}.c. The change-stream watch functions remain stubs until a later
- * task moves them in. ---- */
-int mongoc_watch_init(void)
-{ ogs_fatal("mongoc_watch_init stub called"); return OGS_ERROR; }
-int mongoc_poll_change_stream(void)
-{ ogs_fatal("mongoc_poll_change_stream stub called"); return OGS_ERROR; }

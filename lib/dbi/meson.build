@@ -38,6 +38,7 @@ if libmongoc_dep.found()
         mongoc/mongoc-subscription.c
         mongoc/mongoc-session.c
         mongoc/mongoc-ims.c
+        mongoc/mongoc-watch.c
     '''.split())
     backend_deps += libmongoc_dep
     backend_c_args += '-DOGS_DBI_HAVE_MONGOC'

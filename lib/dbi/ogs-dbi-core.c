@@ -36,6 +36,9 @@ static struct {
 
 static const ogs_dbi_backend_t *active;
 
+static ogs_dbi_change_handler_f change_handler;
+static void *change_handler_data;
+
 int ogs_dbi_backend_register(const ogs_dbi_backend_t *backend)
 {
     int i;
@@ -76,6 +79,24 @@ const ogs_dbi_backend_t *ogs_dbi_backend_find(const char *scheme)
 const ogs_dbi_backend_t *ogs_dbi_current_backend(void)
 {
     return active;
+}
+
+void ogs_dbi_set_change_handler(ogs_dbi_change_handler_f handler, void *data)
+{
+    change_handler = handler;
+    change_handler_data = data;
+}
+
+void ogs_dbi_dispatch_change_event(ogs_dbi_change_event_t *event)
+{
+    if (!event)
+        return;
+
+    if (change_handler) {
+        change_handler(event, change_handler_data);
+    } else {
+        ogs_dbi_change_event_free(event);
+    }
 }
 
 static char *extract_scheme(const char *uri)

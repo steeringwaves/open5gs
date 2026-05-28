@@ -40,7 +40,7 @@ typedef struct hss_event_s {
     int timer_id;
 
     struct {
-        void *document;
+        void *change_event; /* ogs_dbi_change_event_t * */
     } dbi;
 } hss_event_t;
 
