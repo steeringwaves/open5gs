@@ -2,7 +2,7 @@
 
 **Status:** Draft — design approved 2026-05-26, awaiting written-spec review.
 **Owner:** 1800alex@gmail.com
-**Target branch:** `metrics-main` (or `main`)
+**Target branch:** `redis-main`
 
 ## 1. Motivation
 
