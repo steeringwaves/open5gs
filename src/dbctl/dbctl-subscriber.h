@@ -62,6 +62,24 @@ cJSON *dbctl_build_subscriber(const dbctl_add_args_t *a);
  */
 const char *dbctl_subscriber_imsi(const cJSON *doc);
 
+/*
+ * Build the JSON payload published to "<prefix>events:subscriber" for a
+ * change event:  {"imsi":"<imsi>","fields":["ambr","slice",...]}
+ *
+ * When `fields`/`nfields` describe no fields (fields == NULL or nfields == 0),
+ * the "fields" key is OMITTED entirely:  {"imsi":"<imsi>"}. The Phase-3 watcher
+ * (lib/dbi/redis/redis-watch.c: redis_parse_rich_event) treats a missing/empty
+ * "fields" list as "refresh ALL fields", so this is how a caller requests a
+ * full refresh. Field names must be ones the watcher maps via
+ * redis_event_field_from_name() (e.g. "ambr", "slice",
+ * "subscriber_status", ...).
+ *
+ * Returns a heap string the caller frees with cJSON_free(), or NULL on error
+ * (including a NULL imsi). PURE: no Redis, no I/O.
+ */
+char *dbctl_build_change_payload(
+        const char *imsi, const char *const *fields, int nfields);
+
 #ifdef __cplusplus
 }
 #endif

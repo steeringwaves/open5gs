@@ -278,6 +278,330 @@ static int cmd_list(dbctl_redis_t *db, int argc, char *argv[])
     return OGS_OK;
 }
 
+/*
+ * GET <prefix>subscriber:<imsi> and parse it. Returns the parsed cJSON doc
+ * (caller frees with cJSON_Delete) or NULL if the subscriber is absent or the
+ * stored JSON is malformed. *existed (if non-NULL) distinguishes "absent" from
+ * "present but malformed".
+ */
+static cJSON *get_subscriber_doc(dbctl_redis_t *db, const char *imsi,
+        int *existed)
+{
+    char *json;
+    cJSON *doc;
+
+    if (existed) *existed = 0;
+
+    json = dbctl_redis_get(db, "subscriber", imsi);
+    if (!json)
+        return NULL;
+    if (existed) *existed = 1;
+
+    doc = cJSON_Parse(json);
+    ogs_free(json);
+    if (!doc)
+        ogs_error("malformed subscriber JSON [%s]", imsi);
+    return doc;
+}
+
+static int cmd_del(dbctl_redis_t *db, int argc, char *argv[])
+{
+    const char *imsi = NULL;
+    cJSON *doc = NULL, *msisdn_arr, *m;
+    int c, existed = 0, rv = OGS_ERROR;
+
+    optind = 1;
+    opterr = 0;
+    while ((c = getopt_long(argc, argv, "", cmd_long_options, NULL)) != -1) {
+        switch (c) {
+        case OPT_IMSI: imsi = optarg; break;
+        default:
+            ogs_error("del: unknown or invalid option");
+            return OGS_ERROR;
+        }
+    }
+
+    if (!imsi) {
+        ogs_error("del: --imsi is required");
+        return OGS_ERROR;
+    }
+
+    doc = get_subscriber_doc(db, imsi, &existed);
+    if (!existed) {
+        ogs_error("del: no such subscriber [%s]", imsi);
+        return OGS_ERROR;
+    }
+    /* doc may be NULL if the stored JSON was malformed; still delete the key
+     * but we cannot enumerate its msisdn[] index entries. */
+
+    if (dbctl_redis_del(db, "subscriber", imsi) != OGS_OK) {
+        ogs_error("del: failed to delete subscriber [%s]", imsi);
+        goto cleanup;
+    }
+
+    /* Remove each secondary msisdn index entry the doc referenced. */
+    if (doc) {
+        msisdn_arr = cJSON_GetObjectItemCaseSensitive(doc, "msisdn");
+        if (msisdn_arr && cJSON_IsArray(msisdn_arr)) {
+            cJSON_ArrayForEach(m, msisdn_arr) {
+                if (cJSON_IsString(m) && m->valuestring && m->valuestring[0]) {
+                    if (dbctl_redis_del(db, "msisdn", m->valuestring) != OGS_OK)
+                        ogs_warn("del: failed to delete msisdn index [%s]",
+                                m->valuestring);
+                }
+            }
+        }
+    }
+
+    /* Notify a running NF (refresh ALL fields -> it will see the deletion). */
+    if (dbctl_redis_publish_change(db, imsi, NULL, 0) != OGS_OK)
+        ogs_warn("del: failed to publish change event for [%s]", imsi);
+
+    printf("Deleted subscriber %s\n", imsi);
+    rv = OGS_OK;
+
+cleanup:
+    if (doc) cJSON_Delete(doc);
+    return rv;
+}
+
+static int cmd_msisdn_add(dbctl_redis_t *db, int argc, char *argv[])
+{
+    const char *imsi = NULL, *msisdn = NULL;
+    cJSON *doc = NULL, *arr, *m;
+    int c, existed = 0, present = 0, rv = OGS_ERROR;
+
+    optind = 1;
+    opterr = 0;
+    while ((c = getopt_long(argc, argv, "", cmd_long_options, NULL)) != -1) {
+        switch (c) {
+        case OPT_IMSI:   imsi = optarg; break;
+        case OPT_MSISDN: msisdn = optarg; break;
+        default:
+            ogs_error("msisdn-add: unknown or invalid option");
+            return OGS_ERROR;
+        }
+    }
+
+    if (!imsi) {
+        ogs_error("msisdn-add: --imsi is required");
+        return OGS_ERROR;
+    }
+    if (!msisdn) {
+        ogs_error("msisdn-add: --msisdn is required");
+        return OGS_ERROR;
+    }
+
+    doc = get_subscriber_doc(db, imsi, &existed);
+    if (!existed) {
+        ogs_error("msisdn-add: no such subscriber [%s]", imsi);
+        return OGS_ERROR;
+    }
+    if (!doc) {
+        ogs_error("msisdn-add: malformed subscriber [%s]", imsi);
+        return OGS_ERROR;
+    }
+
+    /* 1) maintain the secondary index <prefix>msisdn:<bcd> -> imsi */
+    if (dbctl_redis_set_msisdn_index(db, msisdn, imsi) != OGS_OK) {
+        ogs_error("msisdn-add: failed to index msisdn [%s]", msisdn);
+        goto cleanup;
+    }
+
+    /* 2) add the msisdn into the subscriber doc's msisdn[] if not present */
+    arr = cJSON_GetObjectItemCaseSensitive(doc, "msisdn");
+    if (arr && !cJSON_IsArray(arr)) {
+        /* Replace a non-array "msisdn" with a fresh array. */
+        cJSON_DeleteItemFromObjectCaseSensitive(doc, "msisdn");
+        arr = NULL;
+    }
+    if (!arr) {
+        arr = cJSON_AddArrayToObject(doc, "msisdn");
+        if (!arr) {
+            ogs_error("msisdn-add: out of memory");
+            goto cleanup;
+        }
+    }
+    cJSON_ArrayForEach(m, arr) {
+        if (cJSON_IsString(m) && m->valuestring &&
+                !strcmp(m->valuestring, msisdn)) {
+            present = 1;
+            break;
+        }
+    }
+    if (!present) {
+        cJSON *s = cJSON_CreateString(msisdn);
+        if (!s) {
+            ogs_error("msisdn-add: out of memory");
+            goto cleanup;
+        }
+        cJSON_AddItemToArray(arr, s);
+        if (dbctl_redis_set_subscriber(db, imsi, doc) != OGS_OK) {
+            ogs_error("msisdn-add: failed to update subscriber [%s]", imsi);
+            goto cleanup;
+        }
+    }
+
+    /*
+     * "msisdn" is not an S6a field the watcher maps, so refresh ALL fields
+     * (fields == NULL) rather than send an empty mask.
+     */
+    if (dbctl_redis_publish_change(db, imsi, NULL, 0) != OGS_OK)
+        ogs_warn("msisdn-add: failed to publish change event for [%s]", imsi);
+
+    printf("Added msisdn %s to %s\n", msisdn, imsi);
+    rv = OGS_OK;
+
+cleanup:
+    if (doc) cJSON_Delete(doc);
+    return rv;
+}
+
+static int cmd_msisdn_del(dbctl_redis_t *db, int argc, char *argv[])
+{
+    const char *msisdn = NULL;
+    char *imsi = NULL;
+    cJSON *doc = NULL, *arr, *m;
+    int c, existed = 0, idx, rv = OGS_ERROR;
+
+    optind = 1;
+    opterr = 0;
+    while ((c = getopt_long(argc, argv, "", cmd_long_options, NULL)) != -1) {
+        switch (c) {
+        case OPT_MSISDN: msisdn = optarg; break;
+        default:
+            ogs_error("msisdn-del: unknown or invalid option");
+            return OGS_ERROR;
+        }
+    }
+
+    if (!msisdn) {
+        ogs_error("msisdn-del: --msisdn is required");
+        return OGS_ERROR;
+    }
+
+    /* Resolve imsi from the secondary index; error if it does not exist. */
+    imsi = dbctl_redis_get(db, "msisdn", msisdn);
+    if (!imsi) {
+        ogs_error("msisdn-del: no such msisdn index entry [%s]", msisdn);
+        return OGS_ERROR;
+    }
+
+    if (dbctl_redis_del(db, "msisdn", msisdn) != OGS_OK) {
+        ogs_error("msisdn-del: failed to delete msisdn index [%s]", msisdn);
+        goto cleanup;
+    }
+
+    /* Remove the bcd from the subscriber doc's msisdn[] to stay consistent. */
+    doc = get_subscriber_doc(db, imsi, &existed);
+    if (doc) {
+        arr = cJSON_GetObjectItemCaseSensitive(doc, "msisdn");
+        if (arr && cJSON_IsArray(arr)) {
+            idx = 0;
+            cJSON_ArrayForEach(m, arr) {
+                if (cJSON_IsString(m) && m->valuestring &&
+                        !strcmp(m->valuestring, msisdn)) {
+                    cJSON_DeleteItemFromArray(arr, idx);
+                    break;
+                }
+                idx++;
+            }
+            if (dbctl_redis_set_subscriber(db, imsi, doc) != OGS_OK)
+                ogs_warn("msisdn-del: failed to update subscriber [%s]", imsi);
+        }
+    } else if (existed) {
+        ogs_warn("msisdn-del: malformed subscriber [%s], index removed only",
+                imsi);
+    }
+
+    if (dbctl_redis_publish_change(db, imsi, NULL, 0) != OGS_OK)
+        ogs_warn("msisdn-del: failed to publish change event for [%s]", imsi);
+
+    printf("Removed msisdn %s from %s\n", msisdn, imsi);
+    rv = OGS_OK;
+
+cleanup:
+    if (doc) cJSON_Delete(doc);
+    if (imsi) ogs_free(imsi);
+    return rv;
+}
+
+static int cmd_reset_sqn(dbctl_redis_t *db, int argc, char *argv[])
+{
+    const char *imsi = NULL;
+    long value = 0;
+    int have_value = 0;
+    cJSON *doc = NULL, *security, *sqn;
+    int c, existed = 0, rv = OGS_ERROR;
+
+    optind = 1;
+    opterr = 0;
+    while ((c = getopt_long(argc, argv, "", cmd_long_options, NULL)) != -1) {
+        switch (c) {
+        case OPT_IMSI:  imsi = optarg; break;
+        case OPT_VALUE: value = atol(optarg); have_value = 1; break;
+        default:
+            ogs_error("reset-sqn: unknown or invalid option");
+            return OGS_ERROR;
+        }
+    }
+    (void)have_value;
+
+    if (!imsi) {
+        ogs_error("reset-sqn: --imsi is required");
+        return OGS_ERROR;
+    }
+
+    doc = get_subscriber_doc(db, imsi, &existed);
+    if (!existed) {
+        ogs_error("reset-sqn: no such subscriber [%s]", imsi);
+        return OGS_ERROR;
+    }
+    if (!doc) {
+        ogs_error("reset-sqn: malformed subscriber [%s]", imsi);
+        return OGS_ERROR;
+    }
+
+    /* Ensure a security{} object exists. */
+    security = cJSON_GetObjectItemCaseSensitive(doc, "security");
+    if (security && !cJSON_IsObject(security)) {
+        cJSON_DeleteItemFromObjectCaseSensitive(doc, "security");
+        security = NULL;
+    }
+    if (!security) {
+        security = cJSON_AddObjectToObject(doc, "security");
+        if (!security) {
+            ogs_error("reset-sqn: out of memory");
+            goto cleanup;
+        }
+    }
+
+    /* Replace security.sqn with the new numeric value (default 0). */
+    sqn = cJSON_CreateNumber((double)value);
+    if (!sqn) {
+        ogs_error("reset-sqn: out of memory");
+        goto cleanup;
+    }
+    if (cJSON_GetObjectItemCaseSensitive(security, "sqn"))
+        cJSON_ReplaceItemInObjectCaseSensitive(security, "sqn", sqn);
+    else
+        cJSON_AddItemToObject(security, "sqn", sqn);
+
+    if (dbctl_redis_set_subscriber(db, imsi, doc) != OGS_OK) {
+        ogs_error("reset-sqn: failed to update subscriber [%s]", imsi);
+        goto cleanup;
+    }
+
+    /* SQN is not S6a-relevant; deliberately do NOT publish (avoid noise). */
+
+    printf("Reset sqn of %s to %ld\n", imsi, value);
+    rv = OGS_OK;
+
+cleanup:
+    if (doc) cJSON_Delete(doc);
+    return rv;
+}
+
 int main(int argc, char *argv[])
 {
     int rv = EXIT_FAILURE;
@@ -369,12 +693,20 @@ int main(int argc, char *argv[])
         } else if (!strcmp(cmd, "list")) {
             rv = (cmd_list(&db, cmd_argc, cmd_argv) == OGS_OK) ?
                     EXIT_SUCCESS : EXIT_FAILURE;
-        } else if (!strcmp(cmd, "del") ||
-                   !strcmp(cmd, "import") ||
-                   !strcmp(cmd, "export") ||
-                   !strcmp(cmd, "msisdn-add") ||
-                   !strcmp(cmd, "msisdn-del") ||
-                   !strcmp(cmd, "reset-sqn")) {
+        } else if (!strcmp(cmd, "del")) {
+            rv = (cmd_del(&db, cmd_argc, cmd_argv) == OGS_OK) ?
+                    EXIT_SUCCESS : EXIT_FAILURE;
+        } else if (!strcmp(cmd, "msisdn-add")) {
+            rv = (cmd_msisdn_add(&db, cmd_argc, cmd_argv) == OGS_OK) ?
+                    EXIT_SUCCESS : EXIT_FAILURE;
+        } else if (!strcmp(cmd, "msisdn-del")) {
+            rv = (cmd_msisdn_del(&db, cmd_argc, cmd_argv) == OGS_OK) ?
+                    EXIT_SUCCESS : EXIT_FAILURE;
+        } else if (!strcmp(cmd, "reset-sqn")) {
+            rv = (cmd_reset_sqn(&db, cmd_argc, cmd_argv) == OGS_OK) ?
+                    EXIT_SUCCESS : EXIT_FAILURE;
+        } else if (!strcmp(cmd, "import") ||
+                   !strcmp(cmd, "export")) {
             rv = (cmd_not_implemented(cmd) == OGS_OK) ?
                     EXIT_SUCCESS : EXIT_FAILURE;
         } else {

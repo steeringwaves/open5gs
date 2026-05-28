@@ -256,3 +256,52 @@ const char *dbctl_subscriber_imsi(const cJSON *doc)
 
     return item->valuestring;
 }
+
+char *dbctl_build_change_payload(
+        const char *imsi, const char *const *fields, int nfields)
+{
+    cJSON *doc;
+    char *out;
+
+    if (!imsi)
+        return NULL;
+
+    doc = cJSON_CreateObject();
+    if (!doc)
+        return NULL;
+
+    if (!cJSON_AddStringToObject(doc, DBCTL_IMSI_STRING, imsi)) {
+        cJSON_Delete(doc);
+        return NULL;
+    }
+
+    /*
+     * Omit "fields" entirely when no specific fields are given: the Phase-3
+     * watcher treats a missing "fields" list as a full (ALL-fields) refresh.
+     */
+    if (fields && nfields > 0) {
+        cJSON *arr;
+        int i;
+
+        arr = cJSON_AddArrayToObject(doc, "fields");
+        if (!arr) {
+            cJSON_Delete(doc);
+            return NULL;
+        }
+        for (i = 0; i < nfields; i++) {
+            cJSON *s;
+            if (!fields[i])
+                continue;
+            s = cJSON_CreateString(fields[i]);
+            if (!s) {
+                cJSON_Delete(doc);
+                return NULL;
+            }
+            cJSON_AddItemToArray(arr, s);
+        }
+    }
+
+    out = cJSON_PrintUnformatted(doc);
+    cJSON_Delete(doc);
+    return out;
+}

@@ -18,6 +18,7 @@
  */
 
 #include "dbctl-redis.h"
+#include "dbctl-subscriber.h"
 
 /*
  * URI parsing duplicates lib/dbi/redis/redis-backend.c:redis_parse_uri().
@@ -240,6 +241,68 @@ int dbctl_redis_set_msisdn_index(dbctl_redis_t *self,
 
     if (reply) freeReplyObject(reply);
     ogs_free(key);
+    return rv;
+}
+
+int dbctl_redis_del(dbctl_redis_t *self, const char *kind, const char *id)
+{
+    char *key;
+    redisReply *reply;
+    int rv = OGS_ERROR;
+
+    ogs_assert(self);
+    ogs_assert(kind);
+    ogs_assert(id);
+
+    key = dbctl_redis_key(self, kind, id);
+
+    reply = redisCommand(self->ctx, "DEL %s", key);
+    if (reply == NULL) {
+        ogs_error("DEL %s failed: %s", key, self->ctx->errstr);
+    } else if (reply->type == REDIS_REPLY_ERROR) {
+        ogs_error("DEL %s error: %s", key, reply->str);
+    } else {
+        /* INTEGER reply = number of keys removed (0 if absent); both OK. */
+        rv = OGS_OK;
+    }
+
+    if (reply) freeReplyObject(reply);
+    ogs_free(key);
+    return rv;
+}
+
+int dbctl_redis_publish_change(dbctl_redis_t *self,
+        const char *imsi, const char *const *fields, int nfields)
+{
+    char *channel, *payload;
+    redisReply *reply;
+    int rv = OGS_ERROR;
+
+    ogs_assert(self);
+    ogs_assert(imsi);
+
+    payload = dbctl_build_change_payload(imsi, fields, nfields);
+    if (!payload) {
+        ogs_error("Failed to build change-event payload for [%s]", imsi);
+        return OGS_ERROR;
+    }
+
+    /* Channel mirrors lib/dbi/redis/ : "<prefix>events:subscriber". */
+    channel = ogs_msprintf("%sevents:subscriber", self->prefix);
+    ogs_assert(channel);
+
+    reply = redisCommand(self->ctx, "PUBLISH %s %s", channel, payload);
+    if (reply == NULL) {
+        ogs_error("PUBLISH %s failed: %s", channel, self->ctx->errstr);
+    } else if (reply->type == REDIS_REPLY_ERROR) {
+        ogs_error("PUBLISH %s error: %s", channel, reply->str);
+    } else {
+        rv = OGS_OK;
+    }
+
+    if (reply) freeReplyObject(reply);
+    ogs_free(channel);
+    cJSON_free(payload);
     return rv;
 }
 

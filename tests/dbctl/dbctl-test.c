@@ -227,12 +227,82 @@ static void test_build_subscriber_op_sd_msisdn(abts_case *tc, void *data)
     cJSON_Delete(doc);
 }
 
+/*
+ * The rich change-event payload builder. Its shape must match what the Phase-3
+ * watcher parses in lib/dbi/redis/redis-watch.c (redis_parse_rich_event):
+ * {"imsi":"<imsi>","fields":["ambr","slice",...]} and, when no fields are
+ * given, {"imsi":"<imsi>"} with NO "fields" key (the watcher reads that as a
+ * full ALL-fields refresh).
+ */
+static void test_build_change_payload(abts_case *tc, void *data)
+{
+    char *json;
+    cJSON *doc, *imsi, *fields, *f;
+    const char *two[] = { "ambr", "slice" };
+
+    /* (a) imsi + explicit fields -> {"imsi":...,"fields":["ambr","slice"]} */
+    json = dbctl_build_change_payload("001010000000001", two, 2);
+    ABTS_PTR_NOTNULL(tc, json);
+    doc = cJSON_Parse(json);
+    ABTS_PTR_NOTNULL(tc, doc);
+
+    imsi = cJSON_GetObjectItemCaseSensitive(doc, "imsi");
+    ABTS_PTR_NOTNULL(tc, imsi);
+    ABTS_TRUE(tc, cJSON_IsString(imsi));
+    ABTS_STR_EQUAL(tc, "001010000000001", imsi->valuestring);
+
+    fields = cJSON_GetObjectItemCaseSensitive(doc, "fields");
+    ABTS_PTR_NOTNULL(tc, fields);
+    ABTS_TRUE(tc, cJSON_IsArray(fields));
+    ABTS_INT_EQUAL(tc, 2, cJSON_GetArraySize(fields));
+    f = cJSON_GetArrayItem(fields, 0);
+    ABTS_PTR_NOTNULL(tc, f);
+    ABTS_STR_EQUAL(tc, "ambr", f->valuestring);
+    f = cJSON_GetArrayItem(fields, 1);
+    ABTS_PTR_NOTNULL(tc, f);
+    ABTS_STR_EQUAL(tc, "slice", f->valuestring);
+
+    cJSON_Delete(doc);
+    cJSON_free(json);
+
+    /* (b) no fields (NULL,0) -> {"imsi":...} with NO "fields" key (ALL). */
+    json = dbctl_build_change_payload("001010000000002", NULL, 0);
+    ABTS_PTR_NOTNULL(tc, json);
+    doc = cJSON_Parse(json);
+    ABTS_PTR_NOTNULL(tc, doc);
+
+    imsi = cJSON_GetObjectItemCaseSensitive(doc, "imsi");
+    ABTS_PTR_NOTNULL(tc, imsi);
+    ABTS_STR_EQUAL(tc, "001010000000002", imsi->valuestring);
+
+    fields = cJSON_GetObjectItemCaseSensitive(doc, "fields");
+    ABTS_PTR_EQUAL(tc, NULL, fields);
+
+    cJSON_Delete(doc);
+    cJSON_free(json);
+
+    /* (c) a non-NULL array but nfields == 0 also omits "fields". */
+    json = dbctl_build_change_payload("001010000000003", two, 0);
+    ABTS_PTR_NOTNULL(tc, json);
+    doc = cJSON_Parse(json);
+    ABTS_PTR_NOTNULL(tc, doc);
+    fields = cJSON_GetObjectItemCaseSensitive(doc, "fields");
+    ABTS_PTR_EQUAL(tc, NULL, fields);
+    cJSON_Delete(doc);
+    cJSON_free(json);
+
+    /* (d) NULL imsi -> NULL (no payload). */
+    json = dbctl_build_change_payload(NULL, two, 2);
+    ABTS_PTR_EQUAL(tc, NULL, json);
+}
+
 abts_suite *test_dbctl_subscriber(abts_suite *suite)
 {
     suite = ADD_SUITE(suite)
 
     abts_run_test(suite, test_build_subscriber, NULL);
     abts_run_test(suite, test_build_subscriber_op_sd_msisdn, NULL);
+    abts_run_test(suite, test_build_change_payload, NULL);
 
     return suite;
 }

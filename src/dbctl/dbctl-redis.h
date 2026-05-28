@@ -82,6 +82,24 @@ int dbctl_redis_set_msisdn_index(dbctl_redis_t *self,
         const char *msisdn, const char *imsi);
 
 /*
+ * DEL <prefix><kind>:<id>, e.g. dbctl_redis_del(self, "subscriber", imsi) or
+ * dbctl_redis_del(self, "msisdn", bcd). Returns OGS_OK on a successful command
+ * (whether or not the key existed) or OGS_ERROR on a transport/server error.
+ */
+int dbctl_redis_del(dbctl_redis_t *self, const char *kind, const char *id);
+
+/*
+ * PUBLISH <prefix>events:subscriber {"imsi":"<imsi>","fields":[...]} so a
+ * running NF (Phase-3 watcher) refreshes its cached subscriber. The payload is
+ * built by dbctl_build_change_payload(): when fields == NULL or nfields == 0
+ * the "fields" key is omitted and the watcher refreshes ALL fields. The field
+ * names, when given, must be ones redis_event_field_from_name() maps (see
+ * lib/dbi/redis/redis-watch.c). Returns OGS_OK / OGS_ERROR.
+ */
+int dbctl_redis_publish_change(dbctl_redis_t *self,
+        const char *imsi, const char *const *fields, int nfields);
+
+/*
  * SCAN MATCH <prefix>subscriber:* and invoke cb(imsi, data) for each imsi
  * (key prefix stripped). If limit > 0, stop after `limit` callbacks. Returns
  * the number of imsis visited, or a negative value on error.
