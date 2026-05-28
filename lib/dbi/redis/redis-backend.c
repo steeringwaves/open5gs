@@ -26,6 +26,24 @@ static ogs_redis_t self;
 
 ogs_redis_t *ogs_redis(void) { return &self; }
 
+/* Reconnect the main GET/SET context if it has entered an error state.
+ * Returns OGS_OK if usable, OGS_ERROR otherwise. */
+static int redis_reconnect_if_needed(void)
+{
+    if (!ogs_redis()->ctx)
+        return OGS_ERROR;
+    if (ogs_redis()->ctx->err == 0)
+        return OGS_OK;
+    ogs_warn("Redis connection error (%s); reconnecting...",
+            ogs_redis()->ctx->errstr);
+    if (redisReconnect(ogs_redis()->ctx) != REDIS_OK) {
+        ogs_warn("Redis reconnect failed: %s", ogs_redis()->ctx->errstr);
+        return OGS_ERROR;
+    }
+    ogs_info("Redis reconnected");
+    return OGS_OK;
+}
+
 /*
  * Parse "redis://host[:port][/db][?prefix=...]".
  * Rejects non-redis schemes. rediss:// (TLS) is rejected for Phase 2.
@@ -154,7 +172,14 @@ char *redis_get_string(const char *key)
     char *out = NULL;
 
     ogs_assert(ogs_redis()->ctx);
+    if (redis_reconnect_if_needed() != OGS_OK)
+        return NULL;
     reply = redisCommand(ogs_redis()->ctx, "GET %s", key);
+    if (!reply) {
+        /* Fresh drop: try one reconnect+retry before giving up. */
+        if (redis_reconnect_if_needed() == OGS_OK)
+            reply = redisCommand(ogs_redis()->ctx, "GET %s", key);
+    }
     if (!reply) {
         ogs_error("Redis GET failed (no reply) for key %s", key);
         return NULL;
@@ -178,6 +203,10 @@ int redis_update_subscriber(const char *supi, redis_mutate_f mutate, void *data)
         char *json;
         cJSON *doc;
         char *serialized;
+
+        /* Recover a previously-dropped context before re-WATCHing. */
+        if (redis_reconnect_if_needed() != OGS_OK)
+            goto done;
 
         /* WATCH key */
         reply = redisCommand(ogs_redis()->ctx, "WATCH %s", key);
@@ -218,6 +247,9 @@ int redis_update_subscriber(const char *supi, redis_mutate_f mutate, void *data)
                 ogs_error("[%s] redis MULTI failed: %s", supi, reply->str);
                 freeReplyObject(reply);
             }
+            cJSON_free(serialized);
+            { redisReply *ur = redisCommand(ogs_redis()->ctx, "UNWATCH");
+              if (ur) freeReplyObject(ur); }
             goto done;
         }
         freeReplyObject(reply);

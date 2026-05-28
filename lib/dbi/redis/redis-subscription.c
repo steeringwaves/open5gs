@@ -125,6 +125,8 @@ static void redis_parse_session(const cJSON *session_obj, ogs_session_t *session
 
         if (!strcmp(key, OGS_NAME_STRING) &&
                 cJSON_IsString(item) && item->valuestring) {
+            if (session->name)
+                ogs_free(session->name);
             session->name = ogs_strdup(item->valuestring);
             ogs_assert(session->name);
         } else if (!strcmp(key, OGS_TYPE_STRING) && cJSON_IsNumber(item)) {
