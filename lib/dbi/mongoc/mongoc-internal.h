@@ -18,8 +18,8 @@
  */
 
 /*
- * Internal mongoc-backend declarations. Included only by
- * lib/dbi/mongoc/*.c, never by callers.
+ * Internal mongoc-backend declarations. Included only by the mongoc
+ * backend C files under lib/dbi/mongoc, never by callers.
  */
 
 #ifndef OGS_DBI_MONGOC_INTERNAL_H
