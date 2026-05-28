@@ -71,7 +71,9 @@ void ogs_dbi_set_change_handler(ogs_dbi_change_handler_f handler, void *data);
 }
 #endif
 
+#ifdef OGS_DBI_HAVE_MONGOC
 #include "dbi/ogs-mongoc.h"
+#endif
 #include "dbi/subscription.h"
 #include "dbi/session.h"
 #include "dbi/ims.h"

@@ -75,5 +75,6 @@ libdbi = library('ogsdbi',
 
 libdbi_dep = declare_dependency(
     link_with : libdbi,
+    compile_args : backend_c_args,
     include_directories : [libdbi_inc, libinc],
     dependencies : [libproto_dep] + backend_deps)
