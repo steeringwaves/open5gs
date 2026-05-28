@@ -100,9 +100,15 @@ int redis_msisdn_data(char *id, ogs_msisdn_data_t *msisdn_data)
         ogs_assert(sub_key);
         ogs_free(imsi);
     } else {
-        sub_key = redis_subscriber_key(id);
-        if (!sub_key)
-            return OGS_ERROR;
+        /*
+         * `id` was not an MSISDN index entry, so treat it as the bare
+         * subscriber value directly. Callers (e.g. hss-cx-path) pass a bare
+         * bcd/IMSI with no `imsi-` type prefix, so we must NOT route it
+         * through redis_subscriber_key() (which requires a `type-value`
+         * string). Subscriber keys are stored as <prefix>subscriber:<value>.
+         */
+        sub_key = ogs_msprintf("%ssubscriber:%s", ogs_redis()->prefix, id);
+        ogs_assert(sub_key);
     }
 
     json = redis_get_string(sub_key);

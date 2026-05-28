@@ -104,6 +104,18 @@ static void equivalence_roundtrip(abts_case *tc, void *data)
     ABTS_STR_EQUAL(tc, EQ_IMSI, msisdn_data.imsi.bcd);
 
     /*
+     * Read 3b: msisdn_data resolved by the BARE IMSI value (no `imsi-` type
+     * prefix and no MSISDN index entry). This mirrors hss-cx-path callers and
+     * mongoc's `$or [imsi, msisdn]`. The lookup must fall back to the
+     * <prefix>subscriber:<value> key directly and resolve the SAME subscriber.
+     */
+    memset(&msisdn_data, 0, sizeof(msisdn_data));
+    rv = ogs_dbi_msisdn_data(EQ_IMSI, &msisdn_data);
+    ABTS_INT_EQUAL(tc, OGS_OK, rv);
+    ABTS_STR_EQUAL(tc, EQ_IMSI, msisdn_data.imsi.bcd);
+    ABTS_TRUE(tc, msisdn_data.num_of_msisdn >= 1);
+
+    /*
      * Round-trip write 1: set SQN to 200, re-read through auth_info.
      */
     rv = ogs_dbi_update_sqn(EQ_SUPI, 200);
