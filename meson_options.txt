@@ -1,2 +1,6 @@
 option('fuzzing', type: 'boolean', value: false, description: 'Enable fuzzing tests')
 option('lib_fuzzing_engine', type : 'string', value : '', description : 'Path to the libFuzzer engine library')
+option('mongo', type: 'feature', value: 'auto',
+       description: 'MongoDB backend for lib/dbi (libmongoc)')
+option('redis', type: 'feature', value: 'auto',
+       description: 'Redis backend for lib/dbi (hiredis). Phase 2; no-op in Phase 1.')
