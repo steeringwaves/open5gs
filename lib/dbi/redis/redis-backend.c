@@ -209,19 +209,31 @@ int redis_update_subscriber(const char *supi, redis_mutate_f mutate, void *data)
 
         /* MULTI; SET key serialized; EXEC */
         reply = redisCommand(ogs_redis()->ctx, "MULTI");
-        if (reply) freeReplyObject(reply);
+        if (!reply || reply->type == REDIS_REPLY_ERROR) {
+            if (reply) {
+                ogs_error("[%s] redis MULTI failed: %s", supi, reply->str);
+                freeReplyObject(reply);
+            }
+            goto done;
+        }
+        freeReplyObject(reply);
         reply = redisCommand(ogs_redis()->ctx, "SET %s %s", key, serialized);
         if (reply) freeReplyObject(reply);
         cJSON_free(serialized);   /* matches the allocator cJSON was built with */
 
         reply = redisCommand(ogs_redis()->ctx, "EXEC");
         if (!reply) goto done;
-        /* EXEC returns nil array on WATCH conflict -> retry */
+        /* EXEC returns nil (array) on WATCH conflict -> retry */
         if (reply->type == REDIS_REPLY_NIL ||
                 (reply->type == REDIS_REPLY_ARRAY && reply->elements == 0)) {
             freeReplyObject(reply);
             ogs_warn("[%s] redis update conflict, retry %d", supi, attempt + 1);
             continue;
+        }
+        if (reply->type == REDIS_REPLY_ERROR) {
+            ogs_error("[%s] redis EXEC failed: %s", supi, reply->str);
+            freeReplyObject(reply);
+            goto done;
         }
         freeReplyObject(reply);
         rv = OGS_OK;
