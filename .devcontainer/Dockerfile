@@ -24,6 +24,7 @@ RUN apt update -y && apt install -y && \
 	libssl-dev \
 	libidn11-dev \
 	libmongoc-dev \
+	libhiredis-dev \
 	libbson-dev \
 	libyaml-dev \
 	libmicrohttpd-dev \
