@@ -21,11 +21,13 @@
 #include "core/abts.h"
 
 abts_suite *test_change_event(abts_suite *suite);
+abts_suite *test_backend_registry(abts_suite *suite);
 
 const struct testlist {
     abts_suite *(*func)(abts_suite *suite);
 } alltests[] = {
     { test_change_event },
+    { test_backend_registry },
     { NULL },
 };
 
@@ -36,6 +38,8 @@ int main(int argc, const char *const *argv)
 
     ogs_core_initialize();
     atexit(ogs_core_terminate);
+
+    ogs_log_install_domain(&__ogs_dbi_domain, "dbi", OGS_LOG_ERROR);
 
     for (i = 0; alltests[i].func; i++)
         suite = alltests[i].func(suite);
