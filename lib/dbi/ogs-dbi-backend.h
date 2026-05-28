@@ -18,8 +18,8 @@
  */
 
 /*
- * INTERNAL header. Only included by lib/dbi/*.c and lib/dbi/<backend>/*.c.
- * Not installed.
+ * INTERNAL header. Only included by lib/dbi C files and backend C files
+ * under lib/dbi/<backend>. Not installed.
  */
 
 #if !defined(OGS_DBI_INSIDE) && !defined(OGS_DBI_COMPILATION)

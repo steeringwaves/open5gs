@@ -17,7 +17,6 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
-#define OGS_DBI_COMPILATION
 #include "ogs-dbi.h"
 #include "ogs-dbi-backend.h"
 

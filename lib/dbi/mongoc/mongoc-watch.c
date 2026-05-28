@@ -63,7 +63,7 @@ static ogs_dbi_change_event_t *mongoc_build_change_event(
     bson_iter_t iter, child1_iter, child2_iter;
     char *imsi_bcd = NULL;
     uint32_t mask = 0;
-    const char *utf8;
+    const char *utf8 = NULL;
     uint32_t length = 0;
     ogs_dbi_change_event_t *event;
 
