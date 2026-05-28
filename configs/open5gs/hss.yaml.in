@@ -16,4 +16,11 @@ hss:
       - address: 127.0.0.8
         port: 9090
 #  sms_over_ims: "sip:smsc.mnc001.mcc001.3gppnetwork.org:7060;transport=tcp"
+#  # Propagate live subscriber edits to the running HSS (S6a IDR/CLR).
+#  # Works with both backends despite the name:
+#  #  - mongodb://  : requires a MongoDB replica set (change streams).
+#  #  - redis://    : requires Redis keyspace notifications; the HSS best-effort
+#  #                  runs `CONFIG SET notify-keyspace-events Kg$`, but if the
+#  #                  server denies CONFIG, set `notify-keyspace-events Kg$` in
+#  #                  redis.conf.
 #  use_mongodb_change_stream: true
