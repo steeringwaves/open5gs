@@ -111,9 +111,11 @@ For Redis this relies on keyspace notifications. The HSS makes a best-effort
 notify-keyspace-events Kg$
 ```
 
-The watcher listens on the rich `<prefix>events:subscriber` pub/sub channel
-(precise field updates published by `open5gs-dbctl-redis`) plus the keyspace
-notifications as a fallback.
+The watcher listens on two sources: the keyspace notifications above, and a rich
+`<prefix>events:subscriber` pub/sub channel. `open5gs-dbctl-redis` publishes a
+refresh event on that channel for each subscriber it changes (the HSS then
+re-reads the subscriber); the channel also supports precise per-field updates
+for other publishers. Either way the running HSS picks up the change.
 
 ## Caveats / limitations
 
