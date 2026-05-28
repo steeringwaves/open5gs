@@ -125,6 +125,73 @@ static const char SUBSCRIBER_JSON_MULTI[] =
     "\"subscriber_status\":0"
     "}";
 
+/*
+ * A subscriber fixture carrying a PCC rule. slice[0].session[0] ("internet",
+ * sst 1) includes a pcc_rule array with ONE rule: qos{index, arp{...},
+ * mbr{downlink/uplink {value,unit}}, gbr{...}} and a flow array with one flow
+ * {direction:1, description:"permit out ip from any to assigned"}. Exercises
+ * the PCC-rule parse path mirrored from mongoc_session_data.
+ */
+static const char SESSION_PCC_JSON[] =
+    "{"
+    "\"imsi\":\"001010000000003\","
+    "\"security\":{"
+        "\"k\":\"465B5CE8B199B49FAA5F0A2EE238A6BC\","
+        "\"opc\":\"E8ED289DEBA952E4283B54E88E6183CA\","
+        "\"amf\":\"8000\","
+        "\"sqn\":96"
+    "},"
+    "\"msisdn\":[\"491725670003\"],"
+    "\"ambr\":{"
+        "\"downlink\":{\"value\":1,\"unit\":3},"
+        "\"uplink\":{\"value\":1,\"unit\":3}"
+    "},"
+    "\"slice\":[{"
+        "\"sst\":1,"
+        "\"default_indicator\":true,"
+        "\"session\":[{"
+            "\"name\":\"internet\","
+            "\"type\":3,"
+            "\"qos\":{"
+                "\"index\":9,"
+                "\"arp\":{"
+                    "\"priority_level\":8,"
+                    "\"pre_emption_capability\":1,"
+                    "\"pre_emption_vulnerability\":1"
+                "}"
+            "},"
+            "\"ambr\":{"
+                "\"downlink\":{\"value\":1,\"unit\":3},"
+                "\"uplink\":{\"value\":1,\"unit\":3}"
+            "},"
+            "\"pcc_rule\":[{"
+                "\"qos\":{"
+                    "\"index\":1,"
+                    "\"arp\":{"
+                        "\"priority_level\":3,"
+                        "\"pre_emption_capability\":1,"
+                        "\"pre_emption_vulnerability\":2"
+                    "},"
+                    "\"mbr\":{"
+                        "\"downlink\":{\"value\":2,\"unit\":2},"
+                        "\"uplink\":{\"value\":1,\"unit\":2}"
+                    "},"
+                    "\"gbr\":{"
+                        "\"downlink\":{\"value\":2,\"unit\":2},"
+                        "\"uplink\":{\"value\":1,\"unit\":2}"
+                    "}"
+                "},"
+                "\"flow\":[{"
+                    "\"direction\":1,"
+                    "\"description\":\"permit out ip from any to assigned\""
+                "}]"
+            "}]"
+        "}]"
+    "}],"
+    "\"access_restriction_data\":32,"
+    "\"subscriber_status\":0"
+    "}";
+
 static void uri_basic(abts_case *tc, void *data)
 {
     char *host = NULL, *prefix = NULL; int port = 0;
@@ -316,6 +383,40 @@ static void parse_session_data_no_match(abts_case *tc, void *data)
     cJSON_Delete(doc);
 }
 
+static void parse_session_data_pcc(abts_case *tc, void *data)
+{
+    cJSON *doc = cJSON_Parse(SESSION_PCC_JSON);
+    ogs_session_data_t session_data;
+    ogs_s_nssai_t s_nssai;
+    int rv;
+
+    ABTS_PTR_NOTNULL(tc, doc);
+
+    memset(&s_nssai, 0, sizeof(s_nssai));
+    s_nssai.sst = 1;
+    s_nssai.sd.v = OGS_S_NSSAI_NO_SD_VALUE;
+
+    memset(&session_data, 0, sizeof(session_data));
+    rv = redis_parse_session_data(doc, &s_nssai, "internet", &session_data);
+    ABTS_INT_EQUAL(tc, OGS_OK, rv);
+
+    /* One PCC rule with one flow */
+    ABTS_INT_EQUAL(tc, 1, session_data.num_of_pcc_rule);
+    ABTS_INT_EQUAL(tc, 1, session_data.pcc_rule[0].num_of_flow);
+
+    /* Flow direction + description */
+    ABTS_INT_EQUAL(tc, 1, session_data.pcc_rule[0].flow[0].direction);
+    ABTS_PTR_NOTNULL(tc, session_data.pcc_rule[0].flow[0].description);
+    ABTS_STR_EQUAL(tc, "permit out ip from any to assigned",
+            session_data.pcc_rule[0].flow[0].description);
+
+    /* QoS 5QI/QCI index from the fixture */
+    ABTS_INT_EQUAL(tc, 1, session_data.pcc_rule[0].qos.index);
+
+    OGS_SESSION_DATA_FREE(&session_data);
+    cJSON_Delete(doc);
+}
+
 abts_suite *test_redis_parse(abts_suite *suite);
 abts_suite *test_redis_parse(abts_suite *suite)
 {
@@ -329,5 +430,6 @@ abts_suite *test_redis_parse(abts_suite *suite)
     abts_run_test(suite, parse_subscription_data_multi, NULL);
     abts_run_test(suite, parse_session_data_ok, NULL);
     abts_run_test(suite, parse_session_data_no_match, NULL);
+    abts_run_test(suite, parse_session_data_pcc, NULL);
     return suite;
 }

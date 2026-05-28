@@ -217,6 +217,155 @@ static void redis_parse_session(const cJSON *session_obj, ogs_session_t *session
 }
 
 /*
+ * Parse the per-session `pcc_rule[]` array into SESSION_DATA. 1:1 port of the
+ * OGS_PCC_RULE_STRING block in mongoc_session_data: for each rule it parses
+ * qos{index, arp{...}, mbr/gbr{downlink/uplink {value,unit}}} and flow[]
+ * {direction, description}, then derives name/id/precedence from DNN. The
+ * matched session object is the same `child4`-level document mongoc walks, so
+ * the pcc_rule key sits alongside qos/ambr/smf/ue/framed-routes.
+ */
+static void redis_parse_pcc_rule(const cJSON *session_obj, const char *dnn,
+        ogs_session_data_t *session_data)
+{
+    cJSON *pcc_rule_arr, *pcc_rule_el;
+    int i, pcc_rule_index = 0;
+
+    pcc_rule_arr = cJSON_GetObjectItemCaseSensitive(
+            (cJSON *)session_obj, OGS_PCC_RULE_STRING);
+    if (!pcc_rule_arr || !cJSON_IsArray(pcc_rule_arr))
+        return;
+
+    /* Free all PCC Rule present in the session */
+    for (i = 0; i < session_data->num_of_pcc_rule; i++)
+        OGS_PCC_RULE_FREE(&session_data->pcc_rule[i]);
+
+    cJSON_ArrayForEach(pcc_rule_el, pcc_rule_arr) {
+        ogs_pcc_rule_t *pcc_rule = NULL;
+        cJSON *item;
+
+        if (!cJSON_IsObject(pcc_rule_el))
+            continue;
+
+        ogs_assert(pcc_rule_index < OGS_MAX_NUM_OF_PCC_RULE);
+        pcc_rule = &session_data->pcc_rule[pcc_rule_index];
+
+        cJSON_ArrayForEach(item, pcc_rule_el) {
+            const char *key = item->string;
+            if (!key)
+                continue;
+
+            if (!strcmp(key, OGS_QOS_STRING) && cJSON_IsObject(item)) {
+                cJSON *qos_item;
+                cJSON_ArrayForEach(qos_item, item) {
+                    const char *qos_key = qos_item->string;
+                    if (!qos_key)
+                        continue;
+
+                    if (!strcmp(qos_key, OGS_INDEX_STRING) &&
+                            cJSON_IsNumber(qos_item)) {
+                        pcc_rule->qos.index =
+                            (uint8_t)cJSON_GetNumberValue(qos_item);
+                    } else if (!strcmp(qos_key, OGS_ARP_STRING) &&
+                            cJSON_IsObject(qos_item)) {
+                        cJSON *arp_item;
+                        cJSON_ArrayForEach(arp_item, qos_item) {
+                            const char *arp_key = arp_item->string;
+                            if (!arp_key)
+                                continue;
+                            if (!strcmp(arp_key, OGS_PRIORITY_LEVEL_STRING) &&
+                                    cJSON_IsNumber(arp_item)) {
+                                pcc_rule->qos.arp.priority_level =
+                                    (uint8_t)cJSON_GetNumberValue(arp_item);
+                            } else if (!strcmp(arp_key,
+                                        OGS_PRE_EMPTION_CAPABILITY_STRING) &&
+                                    cJSON_IsNumber(arp_item)) {
+                                pcc_rule->qos.arp.pre_emption_capability =
+                                    (uint8_t)cJSON_GetNumberValue(arp_item);
+                            } else if (!strcmp(arp_key,
+                                        OGS_PRE_EMPTION_VULNERABILITY_STRING) &&
+                                    cJSON_IsNumber(arp_item)) {
+                                pcc_rule->qos.arp.pre_emption_vulnerability =
+                                    (uint8_t)cJSON_GetNumberValue(arp_item);
+                            }
+                        }
+                    } else if (!strcmp(qos_key, OGS_MBR_STRING) &&
+                            cJSON_IsObject(qos_item)) {
+                        cJSON *dl = cJSON_GetObjectItemCaseSensitive(
+                                qos_item, OGS_DOWNLINK_STRING);
+                        cJSON *ul = cJSON_GetObjectItemCaseSensitive(
+                                qos_item, OGS_UPLINK_STRING);
+                        if (dl && cJSON_IsObject(dl))
+                            redis_parse_bitrate(dl, &pcc_rule->qos.mbr.downlink);
+                        if (ul && cJSON_IsObject(ul))
+                            redis_parse_bitrate(ul, &pcc_rule->qos.mbr.uplink);
+                    } else if (!strcmp(qos_key, OGS_GBR_STRING) &&
+                            cJSON_IsObject(qos_item)) {
+                        cJSON *dl = cJSON_GetObjectItemCaseSensitive(
+                                qos_item, OGS_DOWNLINK_STRING);
+                        cJSON *ul = cJSON_GetObjectItemCaseSensitive(
+                                qos_item, OGS_UPLINK_STRING);
+                        if (dl && cJSON_IsObject(dl))
+                            redis_parse_bitrate(dl, &pcc_rule->qos.gbr.downlink);
+                        if (ul && cJSON_IsObject(ul))
+                            redis_parse_bitrate(ul, &pcc_rule->qos.gbr.uplink);
+                    }
+                }
+            } else if (!strcmp(key, OGS_FLOW_STRING) && cJSON_IsArray(item)) {
+                cJSON *flow_el;
+                int flow_index = 0;
+
+                cJSON_ArrayForEach(flow_el, item) {
+                    ogs_flow_t *flow = NULL;
+                    cJSON *flow_item;
+
+                    if (!cJSON_IsObject(flow_el))
+                        continue;
+
+                    ogs_assert(
+                            flow_index < OGS_MAX_NUM_OF_FLOW_IN_PCC_RULE);
+                    flow = &pcc_rule->flow[flow_index];
+
+                    cJSON_ArrayForEach(flow_item, flow_el) {
+                        const char *flow_key = flow_item->string;
+                        if (!flow_key)
+                            continue;
+                        if (!strcmp(flow_key, OGS_DIRECTION_STRING) &&
+                                cJSON_IsNumber(flow_item)) {
+                            flow->direction =
+                                (uint8_t)cJSON_GetNumberValue(flow_item);
+                        } else if (!strcmp(flow_key, OGS_DESCRIPTION_STRING) &&
+                                cJSON_IsString(flow_item) &&
+                                flow_item->valuestring) {
+                            size_t length = strlen(flow_item->valuestring);
+                            flow->description = ogs_calloc(1, length+1);
+                            ogs_assert(flow->description);
+                            ogs_cpystrn((char *)flow->description,
+                                    flow_item->valuestring, length+1);
+                        }
+                    }
+                    flow_index++;
+                }
+                pcc_rule->num_of_flow = flow_index;
+            }
+        }
+
+        /* EPC: Charing-Rule-Name */
+        ogs_assert(!pcc_rule->name);
+        pcc_rule->name = ogs_msprintf("%s-g%d", dnn, pcc_rule_index+1);
+        ogs_assert(pcc_rule->name);
+
+        /* 5GC: PCC-Rule-Id */
+        ogs_assert(!pcc_rule->id);
+        pcc_rule->id = ogs_msprintf("%s-n%d", dnn, pcc_rule_index+1);
+        ogs_assert(pcc_rule->id);
+
+        pcc_rule->precedence = pcc_rule_index+1;
+        pcc_rule_index++;
+    }
+    session_data->num_of_pcc_rule = pcc_rule_index;
+}
+
+/*
  * Find and fill the ONE session matching S_NSSAI (sst, and sd when present on
  * both sides) AND DNN (== session name). 1:1 port of mongoc_session_data's
  * selection logic. Returns OGS_ERROR if no slice/session matches (mongoc's
@@ -315,6 +464,7 @@ int redis_parse_session_data(const cJSON *doc, const ogs_s_nssai_t *s_nssai,
 
     session = &session_data->session;
     redis_parse_session(matched_session, session);
+    redis_parse_pcc_rule(matched_session, dnn, session_data);
 
     return OGS_OK;
 }
