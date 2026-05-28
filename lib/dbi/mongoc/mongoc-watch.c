@@ -81,8 +81,10 @@ static ogs_dbi_change_event_t *mongoc_build_change_event(
         }
     }
 
-    if (!imsi_bcd)
+    if (!imsi_bcd) {
+        ogs_debug("Change event with no 'imsi' field in fullDocument");
         return NULL;
+    }
 
     if (bson_iter_init_find(&iter, document, "updateDescription")) {
         bson_iter_recurse(&iter, &child1_iter);

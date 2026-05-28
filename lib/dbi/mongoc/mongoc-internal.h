@@ -36,8 +36,7 @@ extern "C" {
 extern const ogs_dbi_backend_t mongoc_backend;
 
 /* Backend method implementations. Naming: drop `ogs_dbi_`, prepend `mongoc_`.
- * Defined across mongoc-{backend,subscription,session,ims,watch}.c as later
- * tasks fill them in; mongoc-backend.c provides temporary stubs until then. */
+ * Defined across mongoc-{subscription,session,ims,watch}.c. */
 int  mongoc_auth_info(char *supi, ogs_dbi_auth_info_t *out);
 int  mongoc_update_sqn(char *supi, uint64_t sqn);
 int  mongoc_increment_sqn(char *supi);
