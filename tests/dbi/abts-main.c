@@ -23,6 +23,7 @@
 abts_suite *test_change_event(abts_suite *suite);
 abts_suite *test_backend_registry(abts_suite *suite);
 abts_suite *test_redis_parse(abts_suite *suite);
+abts_suite *test_redis_equivalence(abts_suite *suite);
 
 const struct testlist {
     abts_suite *(*func)(abts_suite *suite);
@@ -30,6 +31,7 @@ const struct testlist {
     { test_change_event },
     { test_backend_registry },
     { test_redis_parse },
+    { test_redis_equivalence },
     { NULL },
 };
 

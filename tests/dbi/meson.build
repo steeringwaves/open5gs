@@ -20,6 +20,7 @@ testdbi_sources = files('''
     change-event-test.c
     backend-registry-test.c
     redis-parse-test.c
+    redis-equivalence-test.c
 '''.split())
 
 testdbi_exe = executable('dbi-tests',
