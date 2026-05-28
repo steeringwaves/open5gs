@@ -17,6 +17,7 @@
 
 libdbi_sources = files('''
     ogs-dbi.h
+    ogs-dbi-backend.h
 
     ogs-mongoc.h
 
