@@ -610,6 +610,68 @@ static void mutate_mme_ok(abts_case *tc, void *data)
     cJSON_Delete(doc);
 }
 
+static void watch_field_from_name(abts_case *tc, void *data)
+{
+    ABTS_INT_EQUAL(tc, OGS_DBI_FIELD_AMBR,
+            (int)redis_event_field_from_name("ambr"));
+    ABTS_INT_EQUAL(tc, OGS_DBI_FIELD_SLICE,
+            (int)redis_event_field_from_name("slice"));
+    ABTS_INT_EQUAL(tc, OGS_DBI_FIELD_SUBSCRIBER_STATUS,
+            (int)redis_event_field_from_name("subscriber_status"));
+    ABTS_INT_EQUAL(tc, 0, (int)redis_event_field_from_name("nope"));
+}
+
+static void watch_parse_rich_event_ok(abts_case *tc, void *data)
+{
+    char *imsi = NULL;
+    uint32_t mask = 0;
+    int rv = redis_parse_rich_event(
+            "{\"imsi\":\"001010000000001\",\"fields\":[\"ambr\",\"slice\"]}",
+            &imsi, &mask);
+    ABTS_INT_EQUAL(tc, OGS_OK, rv);
+    ABTS_PTR_NOTNULL(tc, imsi);
+    ABTS_STR_EQUAL(tc, "001010000000001", imsi);
+    ABTS_INT_EQUAL(tc, (int)(OGS_DBI_FIELD_AMBR | OGS_DBI_FIELD_SLICE),
+            (int)mask);
+    ogs_free(imsi);
+}
+
+static void watch_parse_rich_event_no_fields(abts_case *tc, void *data)
+{
+    char *imsi = NULL;
+    uint32_t mask = 0;
+    int rv = redis_parse_rich_event(
+            "{\"imsi\":\"001010000000001\"}", &imsi, &mask);
+    ABTS_INT_EQUAL(tc, OGS_OK, rv);
+    ABTS_PTR_NOTNULL(tc, imsi);
+    ABTS_INT_EQUAL(tc, (int)OGS_DBI_FIELD_ALL, (int)mask);
+    ogs_free(imsi);
+}
+
+static void watch_parse_rich_event_no_imsi(abts_case *tc, void *data)
+{
+    char *imsi = NULL;
+    uint32_t mask = 0;
+    int rv = redis_parse_rich_event(
+            "{\"fields\":[\"ambr\"]}", &imsi, &mask);
+    ABTS_INT_EQUAL(tc, OGS_ERROR, rv);
+    ABTS_PTR_EQUAL(tc, NULL, imsi);
+}
+
+static void watch_keyspace_channel_to_imsi(abts_case *tc, void *data)
+{
+    char *imsi = redis_keyspace_channel_to_imsi(
+            "__keyspace@0__:open5gs:subscriber:001010000000001", "open5gs:");
+    ABTS_PTR_NOTNULL(tc, imsi);
+    ABTS_STR_EQUAL(tc, "001010000000001", imsi);
+    ogs_free(imsi);
+
+    /* A channel that does not match the "<prefix>subscriber:" head. */
+    imsi = redis_keyspace_channel_to_imsi(
+            "__keyspace@0__:open5gs:other:x", "open5gs:");
+    ABTS_PTR_EQUAL(tc, NULL, imsi);
+}
+
 abts_suite *test_redis_parse(abts_suite *suite);
 abts_suite *test_redis_parse(abts_suite *suite)
 {
@@ -630,5 +692,10 @@ abts_suite *test_redis_parse(abts_suite *suite)
     abts_run_test(suite, mutate_sqn_increment_ok, NULL);
     abts_run_test(suite, mutate_imeisv_ok, NULL);
     abts_run_test(suite, mutate_mme_ok, NULL);
+    abts_run_test(suite, watch_field_from_name, NULL);
+    abts_run_test(suite, watch_parse_rich_event_ok, NULL);
+    abts_run_test(suite, watch_parse_rich_event_no_fields, NULL);
+    abts_run_test(suite, watch_parse_rich_event_no_imsi, NULL);
+    abts_run_test(suite, watch_keyspace_channel_to_imsi, NULL);
     return suite;
 }

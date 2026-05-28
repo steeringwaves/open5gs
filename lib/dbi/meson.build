@@ -54,6 +54,7 @@ if libhiredis_dep.found()
         redis/redis-subscription.c
         redis/redis-session.c
         redis/redis-ims.c
+        redis/redis-watch.c
     '''.split())
     backend_deps += libhiredis_dep
     backend_c_args += '-DOGS_DBI_HAVE_REDIS'
