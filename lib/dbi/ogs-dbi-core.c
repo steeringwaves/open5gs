@@ -24,6 +24,10 @@
 extern const ogs_dbi_backend_t mongoc_backend;
 #endif
 
+#ifdef OGS_DBI_HAVE_REDIS
+extern const ogs_dbi_backend_t redis_backend;
+#endif
+
 int __ogs_dbi_domain;
 
 #define OGS_DBI_MAX_BACKENDS 4
@@ -129,6 +133,10 @@ static void register_builtin_backends(void)
 
 #ifdef OGS_DBI_HAVE_MONGOC
     ogs_dbi_backend_register(&mongoc_backend);
+#endif
+
+#ifdef OGS_DBI_HAVE_REDIS
+    ogs_dbi_backend_register(&redis_backend);
 #endif
 }
 

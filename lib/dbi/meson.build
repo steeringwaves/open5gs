@@ -46,6 +46,15 @@ endif
 
 libhiredis_dep = dependency('hiredis', required: get_option('redis'))
 if libhiredis_dep.found()
+    libdbi_sources += files('''
+        redis/cJSON.h
+        redis/cJSON.c
+        redis/redis-internal.h
+        redis/redis-backend.c
+        redis/redis-subscription.c
+        redis/redis-session.c
+        redis/redis-ims.c
+    '''.split())
     backend_deps += libhiredis_dep
     backend_c_args += '-DOGS_DBI_HAVE_REDIS'
 endif
@@ -54,7 +63,7 @@ if not libmongoc_dep.found() and not libhiredis_dep.found()
     error('At least one of -Dmongo / -Dredis must be enabled')
 endif
 
-libdbi_inc = include_directories('.', 'mongoc')
+libdbi_inc = include_directories('.', 'mongoc', 'redis')
 
 libdbi = library('ogsdbi',
     sources : libdbi_sources,
