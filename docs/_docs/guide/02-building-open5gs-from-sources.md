@@ -61,7 +61,7 @@ $ sudo ip link set ogstun up
 Install the common dependencies for building the source code.
 
 ```bash
-$ sudo apt install python3-pip python3-setuptools python3-wheel ninja-build build-essential flex bison git cmake libsctp-dev libgnutls28-dev libgcrypt-dev libssl-dev libmongoc-dev libbson-dev libyaml-dev libnghttp2-dev libmicrohttpd-dev libcurl4-gnutls-dev libnghttp2-dev libtins-dev libtalloc-dev meson
+$ sudo apt install python3-pip python3-setuptools python3-wheel ninja-build build-essential flex bison git cmake libsctp-dev libgnutls28-dev libgcrypt-dev libssl-dev libmongoc-dev libbson-dev libhiredis-dev libyaml-dev libnghttp2-dev libmicrohttpd-dev libcurl4-gnutls-dev libnghttp2-dev libtins-dev libtalloc-dev meson
 ```
 
 Install libidn-dev or libidn11-dev depending on your system
@@ -86,6 +86,29 @@ $ cd open5gs
 $ meson build --prefix=`pwd`/install
 $ ninja -C build
 ```
+
+#### Database backend options
+
+Open5GS stores subscriber data in MongoDB by default, but can use **Redis**
+instead (lighter — well suited to a Raspberry Pi). Two meson options select the
+backends (both default to `auto`, i.e. built if the dependency is found):
+
+| Option | Dependency | Notes |
+| --- | --- | --- |
+| `-Dmongo=enabled\|disabled\|auto` | `libmongoc-dev`, `libbson-dev` | MongoDB backend (`db_uri: mongodb://...`) |
+| `-Dredis=enabled\|disabled\|auto` | `libhiredis-dev` | Redis backend (`db_uri: redis://...`) |
+
+At least one must be enabled (meson errors at configure time otherwise). For a
+libmongoc-free build (no MongoDB needed at all):
+
+```bash
+$ meson build -Dmongo=disabled -Dredis=enabled --prefix=`pwd`/install
+$ ninja -C build
+```
+
+See [Redis Subscriber Backend]({{ site.url }}{{ site.baseurl }}/docs/guide/redis-backend)
+for configuration, provisioning with `open5gs-dbctl-redis`, and migrating from
+MongoDB.
 
 Please free up enough memory space on the VM and run the test program.
 

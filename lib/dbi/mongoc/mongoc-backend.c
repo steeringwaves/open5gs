@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2019-2023 by Sukchan Lee <acetcom@gmail.com>
+ * Copyright (C) 2026 by Sukchan Lee <acetcom@gmail.com>
  *
  * This file is part of Open5GS.
  *
@@ -17,45 +17,53 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
-#include <mongoc.h>
-
-#include "ogs-dbi.h"
-
-int __ogs_dbi_domain;
+#include "mongoc-internal.h"
 
 static ogs_mongoc_t self;
 
-/*
- * We've added it 
- * Because the following function is deprecated in the mongo-c-driver
- */
+const ogs_dbi_backend_t mongoc_backend = {
+    .name              = "mongoc",
+    .scheme            = "mongodb",
+    .init              = ogs_mongoc_init,
+    .final             = ogs_mongoc_final,
+
+    .auth_info         = mongoc_auth_info,
+    .update_sqn        = mongoc_update_sqn,
+    .increment_sqn     = mongoc_increment_sqn,
+    .update_imeisv     = mongoc_update_imeisv,
+    .update_mme        = mongoc_update_mme,
+
+    .subscription_data = mongoc_subscription_data,
+    .session_data      = mongoc_session_data,
+    .msisdn_data       = mongoc_msisdn_data,
+    .ims_data          = mongoc_ims_data,
+
+    .watch_init         = mongoc_watch_init,
+    .poll_change_stream = mongoc_poll_change_stream,
+};
+
 static bool
-ogs_mongoc_mongoc_client_get_server_status (mongoc_client_t *client, /* IN */
-                                 mongoc_read_prefs_t *read_prefs, /* IN */
-                                 bson_t *reply,                   /* OUT */
-                                 bson_error_t *error)             /* OUT */
+mongoc_get_server_status(mongoc_client_t *client,
+                         mongoc_read_prefs_t *read_prefs,
+                         bson_t *reply, bson_error_t *error)
 {
     bson_t cmd = BSON_INITIALIZER;
-    bool ret = false;
+    bool ret;
 
-    BSON_ASSERT (client);
-
-    BSON_APPEND_INT32 (&cmd, "ping", 1);
-    ret = mongoc_client_command_simple (
-        client, "admin", &cmd, read_prefs, reply, error);
-    bson_destroy (&cmd);
-
+    BSON_ASSERT(client);
+    BSON_APPEND_INT32(&cmd, "ping", 1);
+    ret = mongoc_client_command_simple(
+            client, "admin", &cmd, read_prefs, reply, error);
+    bson_destroy(&cmd);
     return ret;
 }
 
 static char *masked_db_uri(const char *db_uri)
 {
-    char *tmp;
-    char *array[2], *saveptr = NULL;
-    char *masked = NULL;
+    char *tmp, *masked = NULL, *saveptr = NULL;
+    char *array[2];
 
     ogs_assert(db_uri);
-
     tmp = ogs_strdup(db_uri);
     ogs_assert(tmp);
 
@@ -71,9 +79,7 @@ static char *masked_db_uri(const char *db_uri)
         masked = ogs_strdup(array[0]);
         ogs_assert(masked);
     }
-
     ogs_free(tmp);
-
     return masked;
 }
 
@@ -82,7 +88,6 @@ int ogs_mongoc_init(const char *db_uri)
     bson_t reply;
     bson_error_t error;
     bson_iter_t iter;
-
     const mongoc_uri_t *uri;
 
     if (!db_uri) {
@@ -95,7 +100,6 @@ int ogs_mongoc_init(const char *db_uri)
     self.masked_db_uri = masked_db_uri(db_uri);
 
     mongoc_init();
-
     self.initialized = true;
 
     self.client = mongoc_client_new(db_uri);
@@ -117,23 +121,38 @@ int ogs_mongoc_init(const char *db_uri)
     self.database = mongoc_client_get_database(self.client, self.name);
     ogs_assert(self.database);
 
-    if (!ogs_mongoc_mongoc_client_get_server_status(
-                self.client, NULL, &reply, &error)) {
+    if (!mongoc_get_server_status(self.client, NULL, &reply, &error)) {
         ogs_warn("Failed to connect to server [%s]", self.masked_db_uri);
         return OGS_RETRY;
     }
-
     ogs_assert(bson_iter_init_find(&iter, &reply, "ok"));
-
     bson_destroy(&reply);
 
     ogs_info("MongoDB URI: '%s'", self.masked_db_uri);
+
+    /* Open the subscriber collection. (This used to be done by the old
+     * ogs_dbi_init(), which has been replaced by the vtable dispatcher.) */
+    self.collection.subscriber = mongoc_client_get_collection(
+            self.client, self.name, "subscribers");
+    ogs_assert(self.collection.subscriber);
 
     return OGS_OK;
 }
 
 void ogs_mongoc_final(void)
 {
+    if (self.collection.subscriber) {
+        mongoc_collection_destroy(self.collection.subscriber);
+        self.collection.subscriber = NULL;
+    }
+
+#if MONGOC_CHECK_VERSION(1, 9, 0)
+    if (self.stream) {
+        mongoc_change_stream_destroy(self.stream);
+        self.stream = NULL;
+    }
+#endif
+
     if (self.database) {
         mongoc_database_destroy(self.database);
         self.database = NULL;
@@ -156,67 +175,4 @@ void ogs_mongoc_final(void)
 ogs_mongoc_t *ogs_mongoc(void)
 {
     return &self;
-}
-
-int ogs_dbi_init(const char *db_uri)
-{
-    int rv;
-
-    ogs_assert(db_uri);
-
-    rv = ogs_mongoc_init(db_uri);
-    if (rv != OGS_OK) return rv;
-
-    if (ogs_mongoc()->client && ogs_mongoc()->name) {
-        self.collection.subscriber = mongoc_client_get_collection(
-            ogs_mongoc()->client, ogs_mongoc()->name, "subscribers");
-        ogs_assert(self.collection.subscriber);
-    }
-
-    return OGS_OK;
-}
-
-void ogs_dbi_final(void)
-{
-    if (self.collection.subscriber) {
-        mongoc_collection_destroy(self.collection.subscriber);
-    }
-
-#if MONGOC_CHECK_VERSION(1, 9, 0)
-    if (self.stream) {
-        mongoc_change_stream_destroy(self.stream);
-    }
-#endif
-
-    ogs_mongoc_final();
-}
-
-int ogs_dbi_collection_watch_init(void)
-{
-#if MONGOC_CHECK_VERSION(1, 9, 0)
-    bson_t empty = BSON_INITIALIZER;    
-    const bson_t *err_doc;
-    bson_error_t error;
-    bson_t *options = BCON_NEW("fullDocument", "updateLookup");
-   
-    ogs_mongoc()->stream = mongoc_collection_watch(self.collection.subscriber,
-        &empty, options);
-
-    if (mongoc_change_stream_error_document(ogs_mongoc()->stream, &error,
-            &err_doc)) {
-        if (!bson_empty (err_doc)) {
-            ogs_error("Change Stream Error.  Enable replica sets to "
-                "enable database updates to be sent to MME.");
-        } else {
-            ogs_error("Client Error: %s\n", error.message);
-        }
-        return OGS_ERROR;
-    } else {
-        ogs_info("Change Streams are Enabled.");
-    }
-
-    return OGS_OK;
-# else
-    return OGS_ERROR;
-#endif
 }

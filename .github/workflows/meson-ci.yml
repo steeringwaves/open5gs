@@ -65,11 +65,67 @@ jobs:
     - name: Install the dependencies for building the source code.
       run: |
           sudo apt update
-          sudo apt install python3-pip python3-setuptools python3-wheel ninja-build build-essential flex bison git libsctp-dev libgnutls28-dev libgcrypt-dev libssl-dev libidn11-dev libmongoc-dev libbson-dev libyaml-dev libnghttp2-dev libmicrohttpd-dev libcurl4-gnutls-dev libnghttp2-dev libtins-dev libtalloc-dev meson
+          sudo apt install python3-pip python3-setuptools python3-wheel ninja-build build-essential flex bison git libsctp-dev libgnutls28-dev libgcrypt-dev libssl-dev libidn11-dev libmongoc-dev libhiredis-dev libbson-dev libyaml-dev libnghttp2-dev libmicrohttpd-dev libcurl4-gnutls-dev libnghttp2-dev libtins-dev libtalloc-dev meson
     - name: Check out repository code
       uses: actions/checkout@main
     - name: Setup Meson Build
       run: meson setup build
+      env:
+        CC: gcc
+    - name : Build Open5GS
+      run: ninja -C build
+    - name: Test Open5GS
+      run: meson test -C build -v
+
+  ubuntu-redis-only:
+    name: Build and Test Redis-only (no MongoDB) on Ubuntu Latest
+    runs-on: ubuntu-latest
+    services:
+      redis:
+        image: redis
+        ports:
+          - 6379:6379
+    steps:
+    - name: Install the dependencies for building the source code.
+      run: |
+          sudo apt update
+          sudo apt install python3-pip python3-setuptools python3-wheel ninja-build build-essential flex bison git libsctp-dev libgnutls28-dev libgcrypt-dev libssl-dev libidn11-dev libhiredis-dev libyaml-dev libnghttp2-dev libmicrohttpd-dev libcurl4-gnutls-dev libnghttp2-dev libtins-dev libtalloc-dev meson
+    - name: Check out repository code
+      uses: actions/checkout@main
+    - name: Setup Meson Build (Redis only, no libmongoc)
+      run: meson setup build -Dmongo=disabled -Dredis=enabled
+      env:
+        CC: gcc
+    - name : Build Open5GS
+      run: ninja -C build
+    - name: Test Open5GS (backend-agnostic + Redis suites, live against the redis service)
+      run: meson test -C build -v --suite core --suite crypt --suite unit --suite dbi --suite dbctl
+      env:
+        OGS_TEST_REDIS_URI: "redis://127.0.0.1:6379/?prefix=ci:"
+
+  ubuntu-mongo-only:
+    name: Build and Test Mongo-only (no Redis) on Ubuntu Latest
+    runs-on: ubuntu-latest
+    services:
+      mongodb:
+        image: mongo
+        ports:
+          - 27017:27017
+    steps:
+    - name: Create the TUN device with the interface name `ogstun`.
+      run: |
+          sudo ip tuntap add name ogstun mode tun
+          sudo ip addr add 10.45.0.1/16 dev ogstun
+          sudo ip addr add 2001:db8:cafe::1/48 dev ogstun
+          sudo ip link set ogstun up
+    - name: Install the dependencies for building the source code.
+      run: |
+          sudo apt update
+          sudo apt install python3-pip python3-setuptools python3-wheel ninja-build build-essential flex bison git libsctp-dev libgnutls28-dev libgcrypt-dev libssl-dev libidn11-dev libmongoc-dev libbson-dev libyaml-dev libnghttp2-dev libmicrohttpd-dev libcurl4-gnutls-dev libnghttp2-dev libtins-dev libtalloc-dev meson
+    - name: Check out repository code
+      uses: actions/checkout@main
+    - name: Setup Meson Build (Mongo only, no hiredis)
+      run: meson setup build -Dmongo=enabled -Dredis=disabled
       env:
         CC: gcc
     - name : Build Open5GS
