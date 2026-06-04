@@ -95,7 +95,14 @@ char *hss_cx_download_user_data(
         ogs_ims_data_t *ims_data);
 
 int hss_db_poll_change_stream(void);
+
+#if 0
 int hss_handle_change_event(const bson_t *document);
+#else
+/* mongoless: bson_t * is no longer available — pass an opaque pointer.
+ * The body of hss_handle_change_event is gated out in hss-context.c. */
+int hss_handle_change_event(const void *document);
+#endif
 
 
 #ifdef __cplusplus

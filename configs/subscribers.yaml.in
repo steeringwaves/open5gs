@@ -1,0 +1,88 @@
+# Mongoless subscriber catalog (example)
+#
+# Point your daemon at this file via the `db_uri` config knob:
+#
+#   db_uri: file://@sysconfdir@/open5gs/subscribers.yaml
+#
+# or just the bare path:
+#
+#   db_uri: @sysconfdir@/open5gs/subscribers.yaml
+#
+# Schema mirrors the historical MongoDB subscriber document; field names
+# are identical so a Mongo doc can be hand-translated 1:1.
+#
+# Per-subscriber mutable state (sqn, mme_host, mme_realm, purge_flag,
+# imeisv) is NOT written back to this file. It lives in the state
+# backend declared below (Redis when present, in-memory otherwise).
+
+state:
+  # Optional. Omit to keep dynamic state in process memory only — fine for
+  # lab/test, but sqn resets on every restart which breaks LTE auth resync
+  # for real UEs. With Redis configured, state survives restarts.
+  redis: redis://127.0.0.1:6379/0
+
+subscribers:
+  - imsi: "001010000000001"
+    msisdn:
+      - "0000000001"
+    imeisv: ""
+    access_restriction_data: 32
+    subscriber_status: 0
+    operator_determined_barring: 0
+    network_access_mode: 2
+    subscribed_rau_tau_timer: 12
+
+    ambr:
+      downlink: { value: 1, unit: 3 }   # 1 Gbps
+      uplink:   { value: 1, unit: 3 }
+
+    security:
+      k:   "465B5CE8B199B49FAA5F0A2EE238A6BC"
+      opc: "E8ED289DEBA952E4283B54E88E6183CA"
+      # op:  "" # use either opc OR op; opc is preferred
+      amf: "8000"
+      # rand: "" # leave empty unless you need a fixed test vector
+      sqn: 64
+
+    slice:
+      - sst: 1
+        # sd: "ffffff"           # optional; omit for sst-only s-nssai
+        default_indicator: true
+        session:
+          - name: "internet"
+            type: 3              # 1=IPv4, 2=IPv6, 3=IPv4v6
+            qos:
+              index: 9
+              arp:
+                priority_level: 8
+                pre_emption_capability: 1
+                pre_emption_vulnerability: 1
+            ambr:
+              downlink: { value: 1, unit: 3 }
+              uplink:   { value: 1, unit: 3 }
+            # smf:
+            #   ipv4: "127.0.0.4"
+            # ue:
+            #   ipv4: "10.45.0.0/16"
+            # ipv4_framed_routes:
+            #   - "192.168.0.0/24"
+            # pcc_rule:
+            #   - qos:
+            #       index: 8
+            #       arp:
+            #         priority_level: 8
+            #         pre_emption_capability: 1
+            #         pre_emption_vulnerability: 1
+            #       mbr:
+            #         downlink: { value: 82, unit: 1 }
+            #         uplink:   { value: 82, unit: 1 }
+            #     flow:
+            #       - direction: 2
+            #         description: "permit out ip from any to assigned"
+            #       - direction: 1
+            #         description: "permit in ip from any to assigned"
+
+  # Add more subscribers below. The file is loaded once at start-up;
+  # iNotify-based hot reload is intentionally not wired up in this pass.
+  # - imsi: "001010000000002"
+  #   ...

@@ -29,6 +29,9 @@
 #include "dbi/subscription.h"
 #include "dbi/session.h"
 #include "dbi/ims.h"
+/* mongoless: YAML-backed subscriber catalog. Implements the ogs_dbi_*
+ * symbols declared in ogs-mongoc.h / subscription.h / session.h / ims.h. */
+#include "dbi/ogs-flatfile.h"
 
 #undef OGS_DBI_INSIDE
 

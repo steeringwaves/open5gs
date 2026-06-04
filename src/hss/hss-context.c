@@ -1361,6 +1361,8 @@ char *hss_cx_download_user_data(
     return user_data;
 }
 
+#if 0 /* mongoless: poll_change_stream and process_change_stream forward
+       * decls reference bson_t — wrap them together with their bodies. */
 static int poll_change_stream(void);
 static int process_change_stream(const bson_t *document);
 
@@ -1376,7 +1378,16 @@ int hss_db_poll_change_stream(void)
 
     return rv;
 }
+#else
 
+/* mongoless: change-stream polling is a no-op. */
+int hss_db_poll_change_stream(void)
+{
+    return OGS_OK;
+}
+#endif
+
+#if 0 /* mongoless: original change-stream poll loop kept verbatim under #if 0. */
 static int poll_change_stream(void)
 {
 #if MONGOC_CHECK_VERSION(1, 9, 0)
@@ -1408,6 +1419,9 @@ static int poll_change_stream(void)
 #endif
 }
 
+#if 0 /* mongoless: change-stream/bson handlers below are disabled.
+       * hss_handle_change_event takes a const void * now (see header) and
+       * is stubbed at the bottom of this gated section. */
 static int process_change_stream(const bson_t *document)
 {
     int rv;
@@ -1541,3 +1555,14 @@ int hss_handle_change_event(const bson_t *document)
 
     return OGS_OK;
 }
+#endif /* 0 - mongoless (inner: process_change_stream + hss_handle_change_event) */
+#else
+
+/* mongoless: stubbed replacement that swallows the call cleanly. */
+int hss_handle_change_event(const void *document)
+{
+    (void)document;
+    return OGS_OK;
+}
+
+#endif /* 0 - mongoless (outer: poll_change_stream_orig) */

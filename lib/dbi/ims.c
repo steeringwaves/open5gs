@@ -19,6 +19,9 @@
 
 #include "ogs-dbi.h"
 
+#if 0 /* mongoless: MongoDB-backed MSISDN/IMS lookup is disabled.
+       * Replacement implementation lives in ogs-flatfile.c. */
+
 int ogs_dbi_msisdn_data(
         char *imsi_or_msisdn_bcd, ogs_msisdn_data_t *msisdn_data)
 {
@@ -419,3 +422,5 @@ out:
 
     return rv;
 }
+
+#endif /* 0 - mongoless */
