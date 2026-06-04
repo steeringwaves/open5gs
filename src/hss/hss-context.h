@@ -95,7 +95,14 @@ char *hss_cx_download_user_data(
         ogs_ims_data_t *ims_data);
 
 int hss_db_poll_change_stream(void);
+
+#ifdef MONGOLESS
+/* bson_t * is unavailable in mongoless builds — opaque pointer instead.
+ * The body lives in hss-context.c gated by the same macro. */
+int hss_handle_change_event(const void *document);
+#else
 int hss_handle_change_event(const bson_t *document);
+#endif
 
 
 #ifdef __cplusplus

@@ -19,6 +19,9 @@
 
 #include "ogs-dbi.h"
 
+#ifndef MONGOLESS
+/* MongoDB-backed session lookup. Replacement is in ogs-flatfile.c. */
+
 int ogs_dbi_session_data(char *supi, ogs_s_nssai_t *s_nssai, char *dnn,
         ogs_session_data_t *session_data)
 {
@@ -505,3 +508,5 @@ out:
 
     return rv;
 }
+
+#endif /* !MONGOLESS */

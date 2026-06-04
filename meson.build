@@ -127,6 +127,12 @@ subdir('src')
 subdir('misc')
 # Don't build the tests unless we can run them (either natively or in an exe wrapper)
 build_tests = not meson.is_cross_build() or (meson.is_cross_build() and meson.has_exe_wrapper())
+# mongoless: tests/common builds BSON documents directly against libmongoc.
+# Skip them when MONGOLESS is on; reinstate by porting tests/common/context.c
+# to write YAML/Redis instead.
+if get_option('mongoless')
+    build_tests = false
+endif
 if build_tests
     subdir('tests')
 endif
