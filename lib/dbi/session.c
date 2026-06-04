@@ -19,8 +19,8 @@
 
 #include "ogs-dbi.h"
 
-#if 0 /* mongoless: MongoDB-backed session lookup is disabled.
-       * Replacement implementation lives in ogs-flatfile.c. */
+#ifndef MONGOLESS
+/* MongoDB-backed session lookup. Replacement is in ogs-flatfile.c. */
 
 int ogs_dbi_session_data(char *supi, ogs_s_nssai_t *s_nssai, char *dnn,
         ogs_session_data_t *session_data)
@@ -509,4 +509,4 @@ out:
     return rv;
 }
 
-#endif /* 0 - mongoless */
+#endif /* !MONGOLESS */

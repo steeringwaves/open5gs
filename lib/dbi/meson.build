@@ -15,44 +15,62 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+mongoless = get_option('mongoless')
+
+# Upstream sources are always in the source list. Their bodies are gated
+# by #ifndef MONGOLESS so they compile to empty TUs when mongoless is on.
 libdbi_sources = files('''
     ogs-dbi.h
 
     ogs-mongoc.h
-    ogs-flatfile.h
-    ogs-flatfile-state.h
-    ogs-flatfile-watcher.h
 
     ogs-mongoc.c
     subscription.c
     session.c
     ims.c
-    ogs-flatfile.c
-    ogs-flatfile-state.c
-    ogs-flatfile-watcher.c
 '''.split())
 
-# mongoless: libmongoc is no longer linked. The upstream sources above are
-# still compiled as empty translation units (their bodies are gated by
-# #if 0); replacement implementations live in ogs-flatfile{,-state}.c and
-# pull in libyaml + hiredis.
-libyaml_dep = dependency('yaml-0.1')
-libhiredis_dep = dependency('hiredis')
+libdbi_extra_args = []
+libdbi_extra_deps = []
+libdbi_override_options = []
+
+if mongoless
+    libdbi_sources += files('''
+        ogs-flatfile.h
+        ogs-flatfile-state.h
+        ogs-flatfile-watcher.h
+
+        ogs-flatfile.c
+        ogs-flatfile-state.c
+        ogs-flatfile-watcher.c
+    '''.split())
+    libdbi_extra_args += ['-DMONGOLESS']
+    libdbi_extra_deps += [
+        dependency('yaml-0.1'),
+        dependency('hiredis'),
+    ]
+    # ogs-flatfile.c uses C99-style mid-block decls; project-wide
+    # default is gnu89. Only override when those sources are included.
+    libdbi_override_options += ['c_std=gnu99']
+else
+    libdbi_extra_deps += [dependency('libmongoc-1.0')]
+endif
 
 libdbi_inc = include_directories('.')
 
 libdbi = library('ogsdbi',
     sources : libdbi_sources,
     version : libogslib_version,
-    c_args : '-DOGS_DBI_COMPILATION',
+    c_args : ['-DOGS_DBI_COMPILATION'] + libdbi_extra_args,
     include_directories : [libdbi_inc, libinc],
-    dependencies : [libproto_dep, libyaml_dep, libhiredis_dep],
-    # mongoless: ogs-flatfile.c uses C99-style mid-block decls
-    # (project-wide default is gnu89).
-    override_options : ['c_std=gnu99'],
+    dependencies : [libproto_dep] + libdbi_extra_deps,
+    override_options : libdbi_override_options,
     install : true)
 
 libdbi_dep = declare_dependency(
     link_with : libdbi,
     include_directories : [libdbi_inc, libinc],
-    dependencies : [libproto_dep, libyaml_dep, libhiredis_dep])
+    dependencies : [libproto_dep] + libdbi_extra_deps,
+    # Consumers (HSS, UDR, PCRF, PCF, tests/common) include ogs-dbi.h
+    # whose preprocessor branches depend on MONGOLESS — propagate it.
+    compile_args : libdbi_extra_args)

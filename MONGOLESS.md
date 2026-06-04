@@ -181,21 +181,46 @@ apk add --no-cache \
 
 ### Configure + build
 
-The build is identical to upstream — meson detects the new sources
-through `lib/dbi/meson.build`. From the source tree:
+The backend is selected at configure time via the `mongoless` meson
+option. The default is **true** (flat-file).
 
 ```sh
+# YAML + Redis backend (default)
 meson setup build
+ninja -C build
+
+# Original MongoDB backend
+meson setup -Dmongoless=false build-mongo
+ninja -C build-mongo
+```
+
+Switching an existing build dir:
+
+```sh
+meson configure build -Dmongoless=false
 ninja -C build
 ```
 
-Sanity check that the binaries do **not** link `libmongoc`:
+Sanity check the link state:
 
 ```sh
-ldd build/src/hss/open5gs-hssd | grep -iE 'mongo|hiredis|yaml'
-# expect: libhiredis.so..., libyaml-0.so...
-# expect: no mongo entries
+ldd build/src/hss/open5gs-hssd | grep -iE 'mongo|bson|hiredis|yaml'
+# mongoless=true  → libhiredis.so..., libyaml-0.so...
+# mongoless=false → libmongoc-1.0.so..., libbson-1.0.so...
 ```
+
+What the option toggles:
+
+| | `mongoless=true` (default) | `mongoless=false` |
+|---|---|---|
+| `lib/dbi` extra deps | `yaml-0.1` + `hiredis` | `libmongoc-1.0` |
+| Extra sources compiled | `ogs-flatfile{,-state,-watcher}.c` | none |
+| `-DMONGOLESS` propagated to consumers | yes | no |
+| `c_std` for `lib/dbi` | `gnu99` | project default `gnu89` |
+| `tests/` subdir | skipped | built |
+
+Everything in the source tree is gated with `#ifndef MONGOLESS` /
+`#ifdef MONGOLESS`, so a single tree compiles cleanly either way.
 
 ### Dockerfile sketch
 

@@ -90,13 +90,13 @@ void hss_state_operational(ogs_fsm_t *s, hss_event_t *e)
     case HSS_EVENT_DBI_MESSAGE:
         ogs_assert(e);
 
-#if 0 /* mongoless: change-stream events never fire (use_mongodb_change_stream is forced false), but keep the case-arm compilable. */
+#ifndef MONGOLESS
         ogs_assert(e->dbi.document);
 #endif
 
         hss_handle_change_event(e->dbi.document);
 
-#if 0 /* mongoless: bson_destroy is unavailable. */
+#ifndef MONGOLESS
         bson_destroy(e->dbi.document);
 #endif
         break;

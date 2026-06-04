@@ -24,7 +24,7 @@
 #ifndef OGS_MONGOC_H
 #define OGS_MONGOC_H
 
-#if 0 /* mongoless: */
+#ifndef MONGOLESS
 #include <mongoc.h>
 #endif
 
@@ -32,13 +32,14 @@
 extern "C" {
 #endif /* __cplusplus */
 
-/* mongoless: stub MONGOC_CHECK_VERSION so existing `#if MONGOC_CHECK_VERSION(..)`
- * gates in HSS / config-parsing code evaluate to 0 without modification. */
+#ifdef MONGOLESS
+/* Stub MONGOC_CHECK_VERSION so existing `#if MONGOC_CHECK_VERSION(..)` gates
+ * in HSS / config-parsing code evaluate to 0 without modification. The real
+ * macro is provided by <mongoc.h> in non-MONGOLESS builds. */
 #define MONGOC_CHECK_VERSION(major, minor, micro) 0
+#endif
 
-#if 0 /* mongoless: ogs_mongoc_t and the mongoc.h include are disabled.
-       * The ogs_dbi_* public surface is preserved below so callers don't
-       * need to change. Implementations live in ogs-flatfile.c. */
+#ifndef MONGOLESS
 
 typedef struct ogs_mongoc_s {
     bool initialized;
@@ -61,7 +62,8 @@ typedef struct ogs_mongoc_s {
 int ogs_mongoc_init(const char *db_uri);
 void ogs_mongoc_final(void);
 ogs_mongoc_t *ogs_mongoc(void);
-#endif /* 0 - mongoless */
+
+#endif /* !MONGOLESS */
 
 int ogs_dbi_init(const char *db_uri);
 void ogs_dbi_final(void);

@@ -19,9 +19,9 @@
 
 #include "ogs-dbi.h"
 
-#if 0 /* mongoless: MongoDB-backed subscriber accessors are disabled.
-       * Replacement implementations live in ogs-flatfile.c, which serves
-       * the same ogs_dbi_* symbols from a YAML file + Redis state store. */
+#ifndef MONGOLESS
+/* MongoDB-backed subscriber accessors. When MONGOLESS is on, the
+ * replacement implementations live in ogs-flatfile.c. */
 
 int ogs_dbi_auth_info(char *supi, ogs_dbi_auth_info_t *auth_info)
 {
@@ -836,4 +836,4 @@ out:
     return rv;
 }
 
-#endif /* 0 - mongoless */
+#endif /* !MONGOLESS */
