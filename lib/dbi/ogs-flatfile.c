@@ -534,6 +534,10 @@ static void load_session(yaml_node_t *sess_map, ogs_session_t *session)
 
     session->session_type = (uint8_t)yn_map_int(sess_map, OGS_TYPE_STRING, 0);
 
+    /* 2.7.7+ field; defaults to false when omitted. */
+    session->lbo_roaming_allowed =
+            yn_map_bool(sess_map, OGS_LBO_ROAMING_ALLOWED_STRING, false);
+
     qos = yn_map_find(sess_map, OGS_QOS_STRING);
     if (qos && qos->type == YAML_MAPPING_NODE) {
         session->qos.index = yn_map_int(qos, OGS_INDEX_STRING, 0);
@@ -834,7 +838,8 @@ static void load_session_pcc_rules(yaml_node_t *pcc_rules_seq,
     session_data->num_of_pcc_rule = pcc_index;
 }
 
-int ogs_dbi_session_data(char *supi, ogs_s_nssai_t *s_nssai, char *dnn,
+int ogs_dbi_session_data(
+        const char *supi, const ogs_s_nssai_t *s_nssai, const char *dnn,
         ogs_session_data_t *session_data)
 {
     char *supi_type = NULL, *supi_id = NULL;
