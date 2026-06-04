@@ -21,6 +21,7 @@ libdbi_sources = files('''
     ogs-mongoc.h
     ogs-flatfile.h
     ogs-flatfile-state.h
+    ogs-flatfile-watcher.h
 
     ogs-mongoc.c
     subscription.c
@@ -28,6 +29,7 @@ libdbi_sources = files('''
     ims.c
     ogs-flatfile.c
     ogs-flatfile-state.c
+    ogs-flatfile-watcher.c
 '''.split())
 
 # mongoless: libmongoc is no longer linked. The upstream sources above are

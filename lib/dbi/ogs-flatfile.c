@@ -12,6 +12,7 @@
  */
 
 #include "ogs-dbi.h"
+#include "ogs-flatfile-watcher.h"
 
 #include <yaml.h>
 
@@ -22,6 +23,13 @@ typedef struct flatfile_self_s {
     bool document_loaded;
     ogs_hash_t *by_imsi;   /* imsi (bare bcd) -> yaml_node_t * */
     ogs_hash_t *by_msisdn; /* msisdn bcd      -> yaml_node_t * */
+
+    /* Guards document + by_imsi + by_msisdn during reads (ogs_dbi_*
+     * callers) vs the watcher-thread reload. Readers hold the lock for
+     * their full call duration because they walk yaml_node_t pointers
+     * that become invalid the moment the document is replaced. */
+    ogs_thread_mutex_t cache_lock;
+    bool cache_lock_init;
 } flatfile_self_t;
 
 static flatfile_self_t self;
@@ -246,6 +254,21 @@ static yaml_node_t *flatfile_lookup_imsi_or_msisdn(const char *bcd)
  * Public ogs_dbi_* API
  * ------------------------------------------------------------------ */
 
+/* Watcher callback. Holds the cache lock for the full reload — readers
+ * arriving during the swap block briefly. */
+static void on_yaml_changed(void)
+{
+    int rv;
+    ogs_thread_mutex_lock(&self.cache_lock);
+    rv = ogs_flatfile_reload(self.path);
+    if (rv == OGS_OK)
+        ogs_info("flatfile: reloaded %s", self.path);
+    else
+        ogs_error("flatfile: reload of %s failed — catalog may be partial",
+                self.path);
+    ogs_thread_mutex_unlock(&self.cache_lock);
+}
+
 int ogs_dbi_init(const char *db_uri)
 {
     const char *path = db_uri;
@@ -270,15 +293,18 @@ int ogs_dbi_init(const char *db_uri)
         path = db_uri + 7;
 
     memset(&self, 0, sizeof(self));
+    ogs_thread_mutex_init(&self.cache_lock);
+    self.cache_lock_init = true;
+
     self.path = ogs_strdup(path);
     ogs_assert(self.path);
 
     rv = ogs_flatfile_reload(self.path);
     if (rv != OGS_OK) {
-        if (self.path) {
-            ogs_free(self.path);
-            self.path = NULL;
-        }
+        ogs_free(self.path);
+        self.path = NULL;
+        ogs_thread_mutex_destroy(&self.cache_lock);
+        self.cache_lock_init = false;
         return rv;
     }
 
@@ -293,6 +319,11 @@ int ogs_dbi_init(const char *db_uri)
         return rv;
     }
 
+    /* Start the file watcher last — a daemon should run even if inotify
+     * setup fails (e.g. on a system with the user_watches limit hit). */
+    if (ogs_flatfile_watcher_init(self.path, on_yaml_changed) != OGS_OK)
+        ogs_warn("flatfile: file watcher disabled, hot reload unavailable");
+
     self.initialized = true;
     ogs_info("flatfile: loaded %s", self.path);
     return OGS_OK;
@@ -302,16 +333,29 @@ void ogs_dbi_final(void)
 {
     if (!self.initialized) return;
 
+    /* Stop the watcher first so no reload races with teardown. */
+    ogs_flatfile_watcher_final();
+
     ogs_flatfile_state_final();
+
+    ogs_thread_mutex_lock(&self.cache_lock);
     flatfile_clear_indexes();
     if (self.document_loaded) {
         yaml_document_delete(&self.document);
         self.document_loaded = false;
     }
+    ogs_thread_mutex_unlock(&self.cache_lock);
+
     if (self.path) {
         ogs_free(self.path);
         self.path = NULL;
     }
+
+    if (self.cache_lock_init) {
+        ogs_thread_mutex_destroy(&self.cache_lock);
+        self.cache_lock_init = false;
+    }
+
     self.initialized = false;
 }
 
@@ -342,6 +386,8 @@ int ogs_dbi_auth_info(char *supi, ogs_dbi_auth_info_t *auth_info)
         ogs_free(supi_type);
         return OGS_ERROR;
     }
+
+    ogs_thread_mutex_lock(&self.cache_lock);
 
     sub = flatfile_lookup_imsi(supi_id);
     if (!sub) {
@@ -380,11 +426,15 @@ int ogs_dbi_auth_info(char *supi, ogs_dbi_auth_info_t *auth_info)
 
     auth_info->sqn = (uint64_t)yn_map_int64(sec, OGS_SQN_STRING, 0);
 
-    /* State-store overlay wins over YAML default. */
+    /* State-store overlay wins over YAML default. ogs_flatfile_state_*
+     * has its own internal lock — cache_lock is held across the call
+     * but the two locks are independent and always acquired in this
+     * order, so deadlock is impossible. */
     if (ogs_flatfile_state_get_sqn(supi_id, &sqn_override) == OGS_OK)
         auth_info->sqn = sqn_override;
 
 out:
+    ogs_thread_mutex_unlock(&self.cache_lock);
     ogs_free(supi_type);
     ogs_free(supi_id);
     return rv;
@@ -587,6 +637,8 @@ int ogs_dbi_subscription_data(char *supi,
     supi_type = ogs_id_get_type(supi); ogs_assert(supi_type);
     supi_id = ogs_id_get_value(supi); ogs_assert(supi_id);
 
+    ogs_thread_mutex_lock(&self.cache_lock);
+
     sub = flatfile_lookup_imsi(supi_id);
     if (!sub) {
         ogs_error("[%s] Cannot find IMSI in DB", supi);
@@ -690,6 +742,7 @@ int ogs_dbi_subscription_data(char *supi,
     }
 
 out:
+    ogs_thread_mutex_unlock(&self.cache_lock);
     ogs_free(supi_type);
     ogs_free(supi_id);
     return rv;
@@ -796,6 +849,8 @@ int ogs_dbi_session_data(char *supi, ogs_s_nssai_t *s_nssai, char *dnn,
     supi_type = ogs_id_get_type(supi); ogs_assert(supi_type);
     supi_id = ogs_id_get_value(supi); ogs_assert(supi_id);
 
+    ogs_thread_mutex_lock(&self.cache_lock);
+
     sub = flatfile_lookup_imsi(supi_id);
     if (!sub) {
         ogs_error("[%s] Cannot find IMSI in DB", supi);
@@ -874,6 +929,7 @@ found:
     }
 
 out:
+    ogs_thread_mutex_unlock(&self.cache_lock);
     ogs_free(supi_type);
     ogs_free(supi_id);
     return rv;
@@ -889,15 +945,19 @@ int ogs_dbi_msisdn_data(
     yaml_node_t *sub;
     yaml_node_t *msisdns;
     const char *s;
+    int rv = OGS_OK;
 
     ogs_assert(imsi_or_msisdn_bcd);
     ogs_assert(msisdn_data);
     memset(msisdn_data, 0, sizeof(*msisdn_data));
 
+    ogs_thread_mutex_lock(&self.cache_lock);
+
     sub = flatfile_lookup_imsi_or_msisdn(imsi_or_msisdn_bcd);
     if (!sub) {
         ogs_error("[%s] Cannot find IMSI or MSISDN in DB", imsi_or_msisdn_bcd);
-        return OGS_ERROR;
+        rv = OGS_ERROR;
+        goto out;
     }
 
     s = yn_map_str(sub, OGS_IMSI_STRING);
@@ -925,7 +985,9 @@ int ogs_dbi_msisdn_data(
         }
         msisdn_data->num_of_msisdn = idx;
     }
-    return OGS_OK;
+out:
+    ogs_thread_mutex_unlock(&self.cache_lock);
+    return rv;
 }
 
 /* IMS / iFC parsing — covers msisdn + the iFC array used by the HSS Cx path.
@@ -943,6 +1005,8 @@ int ogs_dbi_ims_data(char *supi, ogs_ims_data_t *ims_data)
 
     supi_type = ogs_id_get_type(supi); ogs_assert(supi_type);
     supi_id = ogs_id_get_value(supi); ogs_assert(supi_id);
+
+    ogs_thread_mutex_lock(&self.cache_lock);
 
     sub = flatfile_lookup_imsi(supi_id);
     if (!sub) {
@@ -1066,6 +1130,7 @@ int ogs_dbi_ims_data(char *supi, ogs_ims_data_t *ims_data)
     }
 
 out:
+    ogs_thread_mutex_unlock(&self.cache_lock);
     ogs_free(supi_type);
     ogs_free(supi_id);
     return rv;
