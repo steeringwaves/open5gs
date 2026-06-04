@@ -19,6 +19,10 @@
 
 #include "ogs-dbi.h"
 
+#ifndef MONGOLESS
+/* MongoDB-backed subscriber accessors. When MONGOLESS is on, the
+ * replacement implementations live in ogs-flatfile.c. */
+
 int ogs_dbi_auth_info(char *supi, ogs_dbi_auth_info_t *auth_info)
 {
     int rv = OGS_OK;
@@ -836,3 +840,5 @@ out:
 
     return rv;
 }
+
+#endif /* !MONGOLESS */

@@ -17,11 +17,17 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
+#ifndef MONGOLESS
 #include <mongoc.h>
+#endif
 
 #include "ogs-dbi.h"
 
 int __ogs_dbi_domain;
+
+#ifndef MONGOLESS
+/* MongoDB connection + ogs_dbi_init/final/watch. Replacement is in
+ * ogs-flatfile.c when MONGOLESS is on. */
 
 static ogs_mongoc_t self;
 
@@ -220,3 +226,5 @@ int ogs_dbi_collection_watch_init(void)
     return OGS_ERROR;
 #endif
 }
+
+#endif /* !MONGOLESS */
