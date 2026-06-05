@@ -138,7 +138,90 @@ in [`lib/dbi/ogs-flatfile-watcher.h`](lib/dbi/ogs-flatfile-watcher.h).
 
 ---
 
-## 2. Building on Alpine
+## 2. Runtime data flow
+
+### `subscribers.yaml` — who reads it and when
+
+`ogs_dbi_init(db_uri)` is called **once at process start** by each of:
+
+| NF | Call site |
+|---|---|
+| HSS (EPC) | [`src/hss/hss-init.c`](src/hss/hss-init.c) |
+| UDR (5GC) | [`src/udr/init.c`](src/udr/init.c) |
+| PCRF (EPC) | [`src/pcrf/pcrf-init.c`](src/pcrf/pcrf-init.c) |
+| PCF (5GC) | [`src/pcf/init.c`](src/pcf/init.c) |
+
+That single call parses the YAML, builds in-memory `imsi → yaml_node_t*`
+and `msisdn → yaml_node_t*` indexes, and starts an inotify watcher on
+the file's parent directory. **Each daemon process keeps its own
+private cache and runs its own watcher** — there is no shared
+read-through layer.
+
+After startup, requests hit the in-memory cache (no disk I/O):
+
+| NF | Functions called | Fired on |
+|---|---|---|
+| HSS | `ogs_dbi_auth_info` | S6a Authentication-Information-Request |
+|  | `ogs_dbi_subscription_data` | S6a Update-Location-Request |
+|  | `ogs_dbi_msisdn_data` | Cx / Sh by MSISDN |
+|  | `ogs_dbi_ims_data` | Cx Server-Assignment-Request (iFC download) |
+| UDR | `ogs_dbi_auth_info` | Nudr GET `/auth-data` from AUSF/UDM |
+|  | `ogs_dbi_subscription_data` | Nudr GET `/provisioned-data` from UDM/PCF |
+| PCRF | `ogs_dbi_session_data` | Gx CCR-Initial |
+| PCF | `ogs_dbi_session_data` | Npcf SM-Policy Create |
+|  | `ogs_dbi_subscription_data` | Npcf AM-Policy Create |
+
+The inotify watcher fires when `subscribers.yaml` is modified;
+**2 s after the last write** the cache is rebuilt under the cache
+mutex. Readers block briefly during the swap. If the new file fails
+to parse, the previous catalog is kept and an error is logged
+([`ogs-flatfile.c`](lib/dbi/ogs-flatfile.c) `on_yaml_changed`).
+
+### Redis state — who writes it and what
+
+All mutable per-subscriber data lives in the Redis HASH
+`open5gs:sub:<imsi>`. The set is small and write-only from a daemon
+perspective:
+
+| Field | Written by | Fired on | Implementation |
+|---|---|---|---|
+| `sqn` | HSS | After every successful AKA challenge over S6a | `ogs_dbi_update_sqn` ← `hss_db_update_sqn` |
+|  | UDR | After every AuthEvent PATCH from UDM/AUSF | `ogs_dbi_update_sqn` ← `udr_nudr_dr_handle_subscription_authentication` |
+|  | HSS / UDR | On AUTS resync (USIM detected out-of-sync) | `ogs_dbi_increment_sqn` — bumps by 32, masks to 48 bits |
+| `mme_host`, `mme_realm`, `purge_flag` | **HSS only** | S6a Update-Location-Request when a UE registers to a new MME | `ogs_dbi_update_mme` ← `hss_db_update_mme` |
+| `imeisv` | HSS | When the UE reports IMEISV during attach | `ogs_dbi_update_imeisv` |
+|  | UDR | When UDM PUTs the UE's identity context (IMEI/IMEISV) | `ogs_dbi_update_imeisv` |
+
+Notes:
+- **5GC-only** deployments never run an HSS — only UDR writes.
+- **EPC-only** deployments never run a UDR — only HSS writes.
+- **Hybrid** (4G + 5G NSA/SA) — both write to the same key under their
+  respective auth paths; the field semantics are identical so they
+  don't clobber each other meaningfully.
+- Every write goes through `ogs_flatfile_state_set_*` in
+  [`lib/dbi/ogs-flatfile-state.c`](lib/dbi/ogs-flatfile-state.c) which
+  writes to Redis **and** the in-memory mirror, so reads stay correct
+  even if Redis is temporarily down.
+
+### Redis state — who reads it and what for
+
+Reads happen inside the dbi getter functions, which transparently
+overlay Redis-persisted values on top of the YAML defaults:
+
+| Field | Read by | What the value drives |
+|---|---|---|
+| `sqn` | `ogs_dbi_auth_info` (HSS, UDR) | Returned as the current AKA sequence number when generating the next auth vector. The USIM rejects the challenge as "synch failure" if this doesn't match its own counter — so without Redis persistence, every restart triggers an AUTS resync round-trip per UE. |
+| `mme_host`, `mme_realm`, `purge_flag` | `ogs_dbi_subscription_data` (HSS) | Tells HSS where the UE was previously attached. When the same UE registers via a different MME, HSS sends a Cancel-Location-Request to the old MME using these fields; without them, the old MME would silently retain a stale UE context. |
+| `imeisv` | nothing reads it back | Written for observability/auditing only. Inspect with `redis-cli HGET open5gs:sub:<imsi> imeisv` to see which device last attached as that subscriber. No daemon decisions depend on it. |
+
+Connection handling: `ogs_flatfile_state_get_*` automatically reconnects
+if Redis bounces, so a Redis restart only affects the daemon during the
+brief window before reconnect — reads transparently fall back to the
+in-memory mirror, and writes resume once the connection is back.
+
+---
+
+## 3. Building on Alpine
 
 ### Runtime + build packages
 
@@ -262,7 +345,7 @@ Redis lives in its own container/sidecar — the HSS only needs the
 
 ---
 
-## 3. Provisioning subscribers from tooling (Go)
+## 4. Provisioning subscribers from tooling (Go)
 
 The struct below matches the YAML schema 1:1. Pair it with
 `gopkg.in/yaml.v3` to read/write `subscribers.yaml` from any Go
@@ -494,7 +577,7 @@ rdb.HSet(ctx, "open5gs:sub:001010000000999", map[string]any{
 
 ---
 
-## 4. Migrating from a MongoDB-backed deployment
+## 5. Migrating from a MongoDB-backed deployment
 
 Quick mongoexport → YAML recipe:
 
