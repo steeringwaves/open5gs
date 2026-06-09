@@ -254,18 +254,120 @@ static yaml_node_t *flatfile_lookup_imsi_or_msisdn(const char *bcd)
  * Public ogs_dbi_* API
  * ------------------------------------------------------------------ */
 
+/* Snapshot the IMSI key set from a live by_imsi hash into a fresh hash
+ * whose values are just the sentinel 0x1. Caller frees with
+ * free_imsi_snapshot(). Used to diff pre-reload vs post-reload so we can
+ * reconcile Redis state for removed subscribers. */
+static ogs_hash_t *snapshot_imsi_keys(ogs_hash_t *src)
+{
+    ogs_hash_t *snap = ogs_hash_make();
+    ogs_hash_index_t *hi;
+
+    ogs_assert(snap);
+    if (!src) return snap;
+
+    for (hi = ogs_hash_first(src); hi; hi = ogs_hash_next(hi)) {
+        const void *key;
+        int klen;
+        void *val;
+        char *kcopy;
+        ogs_hash_this(hi, &key, &klen, &val);
+        kcopy = ogs_strndup(key, klen);
+        ogs_assert(kcopy);
+        ogs_hash_set(snap, kcopy, klen, (void *)(uintptr_t)1);
+    }
+    return snap;
+}
+
+static void free_imsi_snapshot(ogs_hash_t *snap)
+{
+    ogs_hash_index_t *hi;
+    if (!snap) return;
+    for (hi = ogs_hash_first(snap); hi; hi = ogs_hash_next(hi)) {
+        const void *key;
+        int klen;
+        void *val;
+        ogs_hash_this(hi, &key, &klen, &val);
+        ogs_hash_set(snap, key, klen, NULL);
+        ogs_free((void *)key);
+    }
+    ogs_hash_destroy(snap);
+}
+
+/* For every IMSI in old_keys that isn't in self.by_imsi anymore, drop
+ * its Redis state. Caller must hold self.cache_lock. */
+static void reconcile_removed_subscribers(ogs_hash_t *old_keys)
+{
+    ogs_hash_index_t *hi;
+    int removed = 0;
+
+    if (!old_keys || !self.by_imsi) return;
+
+    for (hi = ogs_hash_first(old_keys); hi; hi = ogs_hash_next(hi)) {
+        const void *key;
+        int klen;
+        void *val;
+        char *imsi;
+        ogs_hash_this(hi, &key, &klen, &val);
+        if (ogs_hash_get(self.by_imsi, key, klen)) continue;
+
+        imsi = ogs_strndup(key, klen);
+        ogs_assert(imsi);
+        ogs_info("flatfile: subscriber %s removed from YAML — "
+                "dropping Redis state", imsi);
+        ogs_flatfile_state_remove(imsi);
+        ogs_free(imsi);
+        removed++;
+    }
+    if (removed)
+        ogs_info("flatfile: reconciled %d removed subscriber(s)", removed);
+}
+
 /* Watcher callback. Holds the cache lock for the full reload — readers
  * arriving during the swap block briefly. */
 static void on_yaml_changed(void)
 {
     int rv;
+    ogs_hash_t *old_imsi_set;
+    unsigned int old_count, new_count;
+
     ogs_thread_mutex_lock(&self.cache_lock);
+
+    /* Snapshot must happen BEFORE reload — ogs_flatfile_reload() clears
+     * self.by_imsi as it rebuilds. */
+    old_imsi_set = snapshot_imsi_keys(self.by_imsi);
+    old_count = self.by_imsi ? ogs_hash_count(self.by_imsi) : 0;
+
     rv = ogs_flatfile_reload(self.path);
-    if (rv == OGS_OK)
+    if (rv == OGS_OK) {
         ogs_info("flatfile: reloaded %s", self.path);
-    else
+
+        new_count = self.by_imsi ? ogs_hash_count(self.by_imsi) : 0;
+
+        /* Tripwire: if the new YAML has zero subscribers and the old one
+         * had any, refuse to reconcile — almost certainly an accidental
+         * empty/truncated file. Same logic for >50%-drop catches the
+         * "forgot to escape a key" class of accidents. */
+        if (old_count > 0 && new_count == 0) {
+            ogs_warn("flatfile: new YAML has 0 subscribers but old had %u — "
+                    "refusing to auto-purge Redis state. Inspect %s and use "
+                    "`valkey-cli DEL` manually if this was intentional.",
+                    old_count, self.path);
+        } else if (old_count >= 4 && new_count * 2 < old_count) {
+            ogs_warn("flatfile: new YAML has %u subscribers (down from %u) — "
+                    "more than half removed. Skipping auto-purge of Redis "
+                    "state as a safety measure; reconcile manually.",
+                    new_count, old_count);
+        } else {
+            reconcile_removed_subscribers(old_imsi_set);
+        }
+    } else {
         ogs_error("flatfile: reload of %s failed — catalog may be partial",
                 self.path);
+    }
+
+    free_imsi_snapshot(old_imsi_set);
+
     ogs_thread_mutex_unlock(&self.cache_lock);
 }
 

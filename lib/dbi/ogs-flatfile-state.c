@@ -437,3 +437,42 @@ int ogs_flatfile_state_set_imeisv(const char *imsi, const char *imeisv)
     ogs_thread_mutex_unlock(&self.lock);
     return OGS_OK;
 }
+
+/* -------- Remove (auto-reconcile when a SIM disappears from YAML) -------- */
+
+int ogs_flatfile_state_remove(const char *imsi)
+{
+    char key[64];
+    ogs_hash_index_t *hi;
+    size_t imsi_len;
+
+    ogs_assert(imsi);
+    imsi_len = strlen(imsi);
+
+    ogs_thread_mutex_lock(&self.lock);
+
+    if (self.redis && redis_ensure() == OGS_OK) {
+        redisReply *r = redisCommand(self.redis,
+                "DEL %s", state_key(imsi, key, sizeof(key)));
+        if (r) freeReplyObject(r);
+    }
+
+    /* Find the in-memory entry by iterating so we get the stored key
+     * pointer (which we strdup'd in memory_get_or_create) and can free
+     * both the entry and the key. ogs_hash_get only returns the value. */
+    for (hi = ogs_hash_first(self.memory); hi; hi = ogs_hash_next(hi)) {
+        const void *k;
+        int klen;
+        void *v;
+        ogs_hash_this(hi, &k, &klen, &v);
+        if ((size_t)klen == imsi_len && memcmp(k, imsi, klen) == 0) {
+            state_entry_free((state_entry_t *)v);
+            ogs_hash_set(self.memory, k, klen, NULL);
+            ogs_free((void *)k);
+            break;
+        }
+    }
+
+    ogs_thread_mutex_unlock(&self.lock);
+    return OGS_OK;
+}

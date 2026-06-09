@@ -37,6 +37,10 @@ int ogs_flatfile_state_set_mme(const char *imsi,
 int ogs_flatfile_state_get_imeisv(const char *imsi, char **out_imeisv);
 int ogs_flatfile_state_set_imeisv(const char *imsi, const char *imeisv);
 
+/* Drop all state for this IMSI. DEL the Redis HASH and free the in-memory
+ * mirror entry. Idempotent — safe to call on IMSIs we've never seen. */
+int ogs_flatfile_state_remove(const char *imsi);
+
 #ifdef __cplusplus
 }
 #endif

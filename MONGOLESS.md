@@ -317,9 +317,36 @@ So `purge_flag` is the disconnect indicator — not key deletion.
 - **No churn, no eviction pressure under normal use.** Keys are
   write-rarely: `sqn` a handful of times per session, `mme_host` once
   per inter-MME handover, `imeisv` once per device swap.
-- **Orphans when you remove a SIM from `subscribers.yaml`**: the
-  matching Redis key becomes dead state. Open5GS won't clean it up.
-  It's harmless (just bytes), but if you care about reconciliation:
+- **Removing a SIM from `subscribers.yaml` auto-reconciles state.**
+  When the inotify watcher reloads after a save, the daemon diffs the
+  pre-reload IMSI set against the new one and `DEL`s every Redis HASH
+  whose IMSI no longer appears in the file. You'll see one line per
+  removed subscriber in the daemon log:
+
+  ```
+  [dbi] INFO: flatfile: subscriber 001010000000042 removed from YAML — dropping Redis state
+  [dbi] INFO: flatfile: reconciled 1 removed subscriber(s)
+  ```
+
+  This runs under the same cache mutex that guards reads, so an in-flight
+  `ogs_dbi_auth_info()` either sees the old catalog + old state, or the
+  new catalog + reconciled state — never a mix.
+
+- **Safety tripwires.** Two refuse-to-purge conditions protect against
+  the obvious "I accidentally truncated the file" class of mistakes:
+
+  | Trigger | Action |
+  |---|---|
+  | New YAML has 0 subscribers (and old had any) | Skip auto-purge entirely, log a warning telling the operator to `valkey-cli DEL` manually if intentional |
+  | Old had ≥ 4 subscribers and more than half are missing in the new YAML | Same — skip auto-purge, log a warning, reconcile manually |
+
+  These are deliberately conservative. The cost of an accidental
+  mass-purge (every UE re-syncs via AUTS round-trip) is worse than the
+  cost of an operator running a one-off `valkey-cli DEL` to finish the
+  job intentionally.
+
+- **Manual reconcile** (when a tripwire fired, or to clean up before
+  the watcher was wired in):
 
   ```sh
   # Drop one
