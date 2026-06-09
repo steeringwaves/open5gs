@@ -1431,7 +1431,21 @@ void ran_ue_remove(ran_ue_t *ran_ue)
         amf_ue_t *amf_ue = NULL;
         amf_ue = amf_ue_find_by_id(ran_ue->amf_ue_id);
 
-        if (amf_ue) diagnostic_broadcast("{\"Command\":\"UE Release\",\"IMEI\":\"%s\",\"SUPI\":\"%s\",\"SUCI\":\"%s\"}", amf_ue->imeisv_bcd ? amf_ue->imeisv_bcd : "", amf_ue->supi ? amf_ue->supi : "", amf_ue->suci ? amf_ue->suci : "");
+        if (amf_ue) {
+            /* Strip the SUPI type prefix so the IMSI field matches the
+             * format the SMF / MME already emit. */
+            const char *imsi_only =
+                    (amf_ue->supi && !strncmp(amf_ue->supi, "imsi-", 5))
+                    ? amf_ue->supi + 5 : "";
+            diagnostic_broadcast(
+                    "{\"Command\":\"UE Release\","
+                    "\"IMSI\":\"%s\",\"IMEI\":\"%s\","
+                    "\"SUPI\":\"%s\",\"SUCI\":\"%s\"}",
+                    imsi_only,
+                    amf_ue->imeisv_bcd ? amf_ue->imeisv_bcd : "",
+                    amf_ue->supi ? amf_ue->supi : "",
+                    amf_ue->suci ? amf_ue->suci : "");
+        }
     }
 
     if (gnb) ogs_list_remove(&gnb->ran_ue_list, ran_ue);

@@ -3144,12 +3144,22 @@ void gmm_state_initial_context_setup(ogs_fsm_t *s, amf_event_t *e)
         switch (nas_message->gmm.h.message_type) {
         case OGS_NAS_5GS_REGISTRATION_COMPLETE:
             ogs_info("[%s] Registration complete", amf_ue->supi);
-            diagnostic_broadcast(
-                    "{\"Command\":\"UE Attach\","
-                    "\"SUPI\":\"%s\",\"SUCI\":\"%s\",\"IMEI\":\"%s\"}",
-                    amf_ue->supi ? amf_ue->supi : "",
-                    amf_ue->suci ? amf_ue->suci : "",
-                    amf_ue->imeisv_bcd ? amf_ue->imeisv_bcd : "");
+            {
+                /* Strip the SUPI type prefix so the IMSI field matches
+                 * the format the SMF / MME already emit. */
+                const char *imsi_only =
+                        (amf_ue->supi &&
+                         !strncmp(amf_ue->supi, "imsi-", 5))
+                        ? amf_ue->supi + 5 : "";
+                diagnostic_broadcast(
+                        "{\"Command\":\"UE Attach\","
+                        "\"IMSI\":\"%s\",\"SUPI\":\"%s\","
+                        "\"SUCI\":\"%s\",\"IMEI\":\"%s\"}",
+                        imsi_only,
+                        amf_ue->supi ? amf_ue->supi : "",
+                        amf_ue->suci ? amf_ue->suci : "",
+                        amf_ue->imeisv_bcd ? amf_ue->imeisv_bcd : "");
+            }
 
             CLEAR_AMF_UE_TIMER(amf_ue->t3550);
 
