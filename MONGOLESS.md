@@ -121,6 +121,66 @@ redis-cli> HGETALL open5gs:sub:001010000000001
 ...
 ```
 
+### Using Valkey instead of Redis
+
+Valkey is a wire-compatible fork of Redis 7.2 — the `hiredis` client
+in this fork talks to it without any code change. Point `state.redis:`
+at the Valkey port (default `6379`, same as Redis) and you're done.
+The `redis://` URI scheme is just the client-library identifier; there
+is no `valkey://` variant to switch to.
+
+**Do you need to touch the `LATENCY TRACKING` and `EVENT NOTIFICATION`
+sections of `valkey.conf`? No — the defaults are correct for us.**
+
+- `latency-tracking yes` (default) — server-side observability for the
+  `INFO latencystats` / `LATENCY` commands. Open5GS never calls them,
+  so the setting only affects whether Valkey itself maintains those
+  counters. Leave the default; the overhead is negligible.
+- `notify-keyspace-events ""` (default) — controls Valkey's pub/sub
+  keyspace notifications. Open5GS does **not** `SUBSCRIBE` to any
+  Valkey events (the only watcher we run is the inotify watcher on
+  `subscribers.yaml`). Leave the default empty; turning it on would
+  generate keyspace traffic that nothing reads.
+
+**What you *should* configure:**
+
+| Setting | Why |
+|---|---|
+| `appendonly yes` *or* keep default `save` snapshots | We rely on `sqn` / `mme_host` / `mme_realm` / `purge_flag` / `imeisv` surviving a Valkey restart. Without persistence, every Valkey restart triggers an AUTS resync round-trip per real UE. Default RDB snapshots (`save 3600 1 300 100 60 10000`) are fine for lab use; AOF is safer for production — the loss window shrinks to ≤1 s. |
+| `maxmemory-policy noeviction` *if* you set `maxmemory` | If Valkey starts evicting under memory pressure, you'd silently drop `sqn` state for whatever subscribers get picked and break AKA for those UEs until the next AUTS resync. Our keyspace is tiny (~100 bytes × subscriber count), so don't set `maxmemory` at all unless you have to — and if you must, force `noeviction` so writes fail loudly instead of corrupting state. |
+| `requirepass` / ACLs | Optional. If set, put credentials in the `state.redis:` URI: `redis://:secret@host:6379/0` or `redis://username:secret@host:6379/0` (our hiredis client parses both forms). |
+
+**Minimal `valkey.conf` delta — everything else can stay at upstream
+defaults:**
+
+```conf
+# Persistence — pick one or both:
+appendonly yes                         # AOF: ≤1s data-loss window
+# save 3600 1 300 100 60 10000        # RDB snapshots: bigger window, less I/O
+
+# Only set these if you actually constrain memory:
+# maxmemory 256mb
+# maxmemory-policy noeviction
+
+# Bind / auth (optional):
+# bind 127.0.0.1
+# requirepass <something>
+
+# Defaults — do NOT need to change:
+# latency-tracking yes
+# notify-keyspace-events ""
+```
+
+Inspecting state works identically to Redis — same wire protocol, same
+commands:
+
+```sh
+valkey-cli PING                                  # → PONG
+valkey-cli KEYS 'open5gs:sub:*'
+valkey-cli HGETALL open5gs:sub:001010000000001
+valkey-cli MONITOR                               # live wire trace during attach
+```
+
 ### Hot reload
 
 The YAML file is watched with `inotify` on its parent directory (so
