@@ -3143,6 +3143,7 @@ int mme_enb_remove(mme_enb_t *enb)
 
     char buf[OGS_ADDRSTRLEN];
     diagnostic_broadcast("{\"Command\":\"eNB Disconnect\",\"Address\":\"%s\"}", OGS_ADDR(enb->sctp.addr, buf));
+    diagnostic_state_enb_del(OGS_ADDR(enb->sctp.addr, buf));
 
 
     ogs_list_remove(&self.enb_list, enb);
@@ -3296,7 +3297,10 @@ void enb_ue_remove(enb_ue_t *enb_ue)
 
     mme_ue = mme_ue_find_by_id(enb_ue->mme_ue_id);
 
-    if (mme_ue) diagnostic_broadcast("{\"Command\":\"UE Release\",\"IMSI\":\"%s\",\"IMEI\":\"%s\"}", mme_ue->imsi_bcd, mme_ue->imeisv_bcd ? mme_ue->imeisv_bcd : "");
+    if (mme_ue) {
+        diagnostic_broadcast("{\"Command\":\"UE Release\",\"IMSI\":\"%s\",\"IMEI\":\"%s\"}", mme_ue->imsi_bcd, mme_ue->imeisv_bcd ? mme_ue->imeisv_bcd : "");
+        diagnostic_state_ue_del(mme_ue->imsi_bcd);
+    }
 
     if (enb) ogs_list_remove(&enb->enb_ue_list, enb_ue);
 

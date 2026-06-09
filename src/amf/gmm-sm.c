@@ -3159,6 +3159,10 @@ void gmm_state_initial_context_setup(ogs_fsm_t *s, amf_event_t *e)
                         amf_ue->supi ? amf_ue->supi : "",
                         amf_ue->suci ? amf_ue->suci : "",
                         amf_ue->imeisv_bcd ? amf_ue->imeisv_bcd : "");
+                diagnostic_state_ue_set(imsi_only,
+                        amf_ue->imeisv_bcd ? amf_ue->imeisv_bcd : "",
+                        amf_ue->supi ? amf_ue->supi : "",
+                        amf_ue->suci ? amf_ue->suci : "");
             }
 
             CLEAR_AMF_UE_TIMER(amf_ue->t3550);

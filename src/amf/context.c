@@ -1289,6 +1289,7 @@ void amf_gnb_remove(amf_gnb_t *gnb)
 
     char buf[OGS_ADDRSTRLEN];
     diagnostic_broadcast("{\"Command\":\"gNB Disconnect\",\"Address\":\"%s\"}", OGS_ADDR(gnb->sctp.addr, buf));
+    diagnostic_state_gnb_del(OGS_ADDR(gnb->sctp.addr, buf));
 
     ogs_list_remove(&self.gnb_list, gnb);
 
@@ -1446,6 +1447,7 @@ void ran_ue_remove(ran_ue_t *ran_ue)
                 amf_ue->imeisv_bcd ? amf_ue->imeisv_bcd : "",
                 amf_ue->supi ? amf_ue->supi : "",
                 amf_ue->suci ? amf_ue->suci : "");
+        diagnostic_state_ue_del(imsi_only);
     }
 
     gnb = amf_gnb_find_by_id(ran_ue->gnb_id);

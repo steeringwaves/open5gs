@@ -224,6 +224,7 @@ configure_file(output : 'core-config.h', configuration : ogs_libcore_conf)
 
 libcore_sources = files('''
     diagnostic-broadcast.h
+    diagnostic-state.h
     ogs-core.h
 
     ogs-compat.h
@@ -266,6 +267,7 @@ libcore_sources = files('''
     abts.h
 
     diagnostic-broadcast.c
+    diagnostic-state.c
     ogs-abort.c
     ogs-errno.c
     ogs-strings.c
@@ -314,16 +316,22 @@ endif
 libcore_inc = include_directories('.')
 
 libtalloc_dep = dependency('talloc')
+# hiredis is used by diagnostic-state.c (opt-in via the DIAG_REDIS_URL
+# env var). Linking is unconditional so every NF can publish state
+# without each having to opt in at meson level.
+libhiredis_dep = dependency('hiredis')
 
 libcore = library('ogscore',
     sources : libcore_sources,
     version : libogslib_version,
     c_args : '-DOGS_CORE_COMPILATION',
     include_directories : [libcore_inc, libinc],
-    dependencies : [threads, librt, libexecinfo, libsocket, libtalloc_dep],
+    dependencies : [threads, librt, libexecinfo, libsocket,
+            libtalloc_dep, libhiredis_dep],
     install : true)
 
 libcore_dep = declare_dependency(
     link_with : libcore,
     include_directories : [libcore_inc, libinc],
-    dependencies : [threads, librt, libexecinfo, libsocket, libtalloc_dep])
+    dependencies : [threads, librt, libexecinfo, libsocket,
+            libtalloc_dep, libhiredis_dep])

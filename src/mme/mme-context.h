@@ -881,6 +881,8 @@ struct mme_ue_s {
             mme_ue->imsi_bcd, \
             mme_ue->imeisv_bcd ? mme_ue->imeisv_bcd : "", \
             (__sESS)->session ? (__sESS)->session->name : ""); \
+        diagnostic_state_session_del(mme_ue->imsi_bcd, \
+            (__sESS)->session ? (__sESS)->session->name : ""); \
         if (mme_sess_count(mme_ue) == 1) /* Last Session */ \
             CLEAR_SESSION_CONTEXT(mme_ue); \
         mme_sess_remove(__sESS); \

@@ -1774,6 +1774,7 @@ void ngap_handle_ue_context_release_action(ran_ue_t *ran_ue)
                     amf_ue->supi ? amf_ue->supi : "",
                     amf_ue->suci ? amf_ue->suci : "",
                     amf_ue->imeisv_bcd ? amf_ue->imeisv_bcd : "");
+            diagnostic_state_ue_del(imsi_only);
         }
 
         /*

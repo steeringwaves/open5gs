@@ -365,7 +365,103 @@ So `purge_flag` is the disconnect indicator — not key deletion.
 
 ---
 
-## 3. Building on Alpine
+## 3. Live diagnostic state in Redis
+
+In addition to the JSON UDP events emitted by `diagnostic_broadcast()`
+(into [`lib/core/diagnostic-broadcast.c`](lib/core/diagnostic-broadcast.c)),
+the daemons can also maintain **live keys** in Redis representing the
+current state of each gNB / eNB / attached UE / active PDU session.
+The events are still broadcast over UDP for any pre-existing collector
+you might have; the Redis layer is additive.
+
+This is implemented in
+[`lib/core/diagnostic-state.{c,h}`](lib/core/diagnostic-state.h) and
+each entity's connect / attach / create path also does an `HSET` while
+each disconnect / release / remove path does a `DEL`. So the
+keyspace at any moment mirrors what's actually attached — no sidecar
+process needed.
+
+### Opt-in
+
+Set the `DIAG_REDIS_URL` environment variable on each daemon you want
+publishing state. If it's unset or empty, the helpers are silent
+no-ops — same behaviour as before.
+
+```sh
+# systemd drop-in for open5gs-amfd.service, etc.
+[Service]
+Environment=DIAG_REDIS_URL=redis://127.0.0.1:6379/1
+```
+
+URL grammar matches the HSS state backend:
+`redis://[:password@]host[:port][/db]`. Use a different `/db` index
+(e.g. `/1`) from the HSS subscriber store (`/0`) if you want clean
+visual separation in `valkey-cli --scan`.
+
+### Key schema
+
+| Key | Type | Fields |
+|---|---|---|
+| `open5gs:live:gnb:<address>` | HASH | `address`, `connected_at` |
+| `open5gs:live:enb:<address>` | HASH | `address`, `connected_at` |
+| `open5gs:live:ue:<imsi>` | HASH | `imsi`, `imei`, `supi`, `suci`, `attached_at` |
+| `open5gs:live:session:<imsi>:<apn>` | HASH | `imsi`, `apn`, `imei`, `supi`, `ipv4`, `ipv6`, `created_at` |
+
+All `*_at` fields are epoch seconds (`time(NULL)` cast to `long long`).
+The `open5gs:live:*` prefix is distinct from the `open5gs:sub:*`
+subscriber-state prefix so they can share the same Redis DB if you
+prefer.
+
+### Where each key gets set / deleted
+
+| Key | SET site | DEL site |
+|---|---|---|
+| `gnb:<address>` | [`src/amf/amf-sm.c`](src/amf/amf-sm.c) on `AMF_EVENT_NGAP_LO_SCTP_COMM_UP` | [`src/amf/context.c`](src/amf/context.c) `amf_gnb_remove()` |
+| `enb:<address>` | [`src/mme/mme-sm.c`](src/mme/mme-sm.c) on `MME_EVENT_S1AP_LO_SCTP_COMM_UP` | [`src/mme/mme-context.c`](src/mme/mme-context.c) `mme_enb_remove()` |
+| `ue:<imsi>` (5G) | [`src/amf/gmm-sm.c`](src/amf/gmm-sm.c) on `REGISTRATION_COMPLETE` | [`src/amf/context.c`](src/amf/context.c) `ran_ue_remove()` + [`src/amf/ngap-handler.c`](src/amf/ngap-handler.c) NG context release |
+| `ue:<imsi>` (4G) | [`src/mme/emm-sm.c`](src/mme/emm-sm.c) on `ATTACH_COMPLETE` | [`src/mme/s1ap-handler.c`](src/mme/s1ap-handler.c) + [`src/mme/mme-context.c`](src/mme/mme-context.c) |
+| `session:<imsi>:<apn>` | [`src/smf/npcf-handler.c`](src/smf/npcf-handler.c) (5G), [`src/smf/pfcp-sm.c`](src/smf/pfcp-sm.c), [`src/smf/gn-handler.c`](src/smf/gn-handler.c) + [`src/smf/s5c-handler.c`](src/smf/s5c-handler.c) (4G) | [`src/smf/context.c`](src/smf/context.c) `smf_sess_remove()` + [`src/mme/mme-context.h`](src/mme/mme-context.h) `CLEAR_SESSION_CONTEXT` macro |
+
+### Inspecting live state
+
+```sh
+# Everything attached right now
+valkey-cli --scan --pattern 'open5gs:live:*' | sort
+
+# Just the gNBs
+valkey-cli --scan --pattern 'open5gs:live:gnb:*'
+
+# Which device is on a given subscriber
+valkey-cli HGET open5gs:live:ue:001010000000001 imei
+
+# How long has the gNB been up (seconds)
+valkey-cli EVAL "return tonumber(ARGV[1]) - tonumber(redis.call('HGET', KEYS[1], 'connected_at'))" \
+    1 open5gs:live:gnb:10.250.2.155 $(date +%s)
+
+# Live tail of state changes during an attach
+valkey-cli PSUBSCRIBE 'open5gs:live:*'   # needs notify-keyspace-events; see §1.4
+```
+
+### Caveats
+
+- **Crash recovery.** If a daemon crashes mid-flight (segfault, OOM,
+  kernel panic), keys won't be cleaned up. The keyspace can develop
+  ghost entries until you restart the failed daemon and the next
+  attach refreshes them, or run a manual `valkey-cli --scan ... | DEL`
+  reconcile. Same caveat as the HSS subscriber-state mirror.
+- **No TTL.** Keys persist until the matching DEL fires — same lifecycle
+  semantics as the HSS subscriber state (§2.4). If you want an
+  upper-bound expiry as a safety net, you can wrap the helpers with
+  `EXPIRE open5gs:live:ue:<imsi> 86400` (24 h), but the cleaner answer
+  is to fix any crash that left a ghost.
+- **Thread safety.** All helpers serialise through a single mutex
+  internal to `diagnostic-state.c`. The lock is uncontended on a normal
+  attach rate (a few events per second per UE); if you ever scale to
+  thousands of attaches/sec, revisit.
+
+---
+
+## 4. Building on Alpine
 
 ### Runtime + build packages
 
@@ -489,7 +585,7 @@ Redis lives in its own container/sidecar — the HSS only needs the
 
 ---
 
-## 4. Provisioning subscribers from tooling (Go)
+## 5. Provisioning subscribers from tooling (Go)
 
 The struct below matches the YAML schema 1:1. Pair it with
 `gopkg.in/yaml.v3` to read/write `subscribers.yaml` from any Go
@@ -721,7 +817,7 @@ rdb.HSet(ctx, "open5gs:sub:001010000000999", map[string]any{
 
 ---
 
-## 5. Migrating from a MongoDB-backed deployment
+## 6. Migrating from a MongoDB-backed deployment
 
 Quick mongoexport → YAML recipe:
 

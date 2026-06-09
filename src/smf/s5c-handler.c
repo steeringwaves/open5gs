@@ -322,6 +322,11 @@ uint8_t smf_s5c_handle_create_session_request(
         sess->session.name,
         sess->ipv4 ? OGS_INET_NTOP(&sess->ipv4->addr, buf1) : "",
         sess->ipv6 ? OGS_INET6_NTOP(&sess->ipv6->addr, buf2) : "");
+    diagnostic_state_session_set(smf_ue->imsi_bcd, sess->session.name,
+        smf_ue->imeisv_bcd ? smf_ue->imeisv_bcd : "",
+        smf_ue->supi ? smf_ue->supi : "",
+        sess->ipv4 ? OGS_INET_NTOP(&sess->ipv4->addr, buf1) : "",
+        sess->ipv6 ? OGS_INET6_NTOP(&sess->ipv6->addr, buf2) : "");
 
     /* Control Plane(DL) : SGW-S5C */
     sgw_s5c_teid = req->sender_f_teid_for_control_plane.data;

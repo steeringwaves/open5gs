@@ -1604,6 +1604,8 @@ void emm_state_initial_context_setup(ogs_fsm_t *s, mme_event_t *e)
           diagnostic_broadcast("{\"Command\":\"UE Attach\",\"IMSI\":\"%s\", \"IMEI\":\"%s\"}",
             mme_ue->imsi_bcd,
             mme_ue->imeisv_bcd ? mme_ue->imeisv_bcd : "");
+          diagnostic_state_ue_set(mme_ue->imsi_bcd,
+            mme_ue->imeisv_bcd ? mme_ue->imeisv_bcd : "", NULL, NULL);
 
         /*
          * TS24.301

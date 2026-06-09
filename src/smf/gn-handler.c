@@ -335,6 +335,11 @@ uint8_t smf_gn_handle_create_pdp_context_request(
         sess->session.name,
         sess->ipv4 ? OGS_INET_NTOP(&sess->ipv4->addr, buf1) : "",
         sess->ipv6 ? OGS_INET6_NTOP(&sess->ipv6->addr, buf2) : "");
+    diagnostic_state_session_set(smf_ue->imsi_bcd, sess->session.name,
+        smf_ue->imeisv_bcd ? smf_ue->imeisv_bcd : "",
+        smf_ue->supi ? smf_ue->supi : "",
+        sess->ipv4 ? OGS_INET_NTOP(&sess->ipv4->addr, buf1) : "",
+        sess->ipv6 ? OGS_INET6_NTOP(&sess->ipv6->addr, buf2) : "");
 
     return cause_value;
 }

@@ -1811,6 +1811,7 @@ void smf_sess_remove(smf_sess_t *sess)
         sess->session.name, sess->psi,
         sess->ipv4 ? OGS_INET_NTOP(&sess->ipv4->addr, buf1) : "",
         sess->ipv6 ? OGS_INET6_NTOP(&sess->ipv6->addr, buf2) : "");
+    diagnostic_state_session_del(smf_ue->imsi_bcd, sess->session.name);
 
     ogs_list_remove(&smf_ue->sess_list, sess);
 
