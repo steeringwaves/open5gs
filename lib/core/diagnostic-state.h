@@ -6,9 +6,10 @@
  * a well-known key path; del() removes it. Reading the live system
  * state then becomes a Valkey/Redis scan instead of a stream parse.
  *
- * Opt-in: the Redis URL is read from the DIAG_REDIS_URL env var at
- * first use. If the env var is unset or empty, every helper is a
- * silent no-op — same behaviour as upstream.
+ * Opt-in: configured at boot from the global YAML's `diagnostic.state`
+ * block — see lib/app/diagnostic-config.{c,h}. Until
+ * diagnostic_state_configure(enabled=true, ...) is called, every helper
+ * is a silent no-op.
  *
  * URL format (parsed identically to lib/dbi/ogs-flatfile-state.c):
  *   redis://[:password@]host[:port][/db]
@@ -26,12 +27,24 @@
 #ifndef DIAGNOSTIC_STATE_H
 #define DIAGNOSTIC_STATE_H
 
+#include <stdbool.h>
+
 #ifdef __cplusplus
 extern "C" {
 #endif
 
 void diagnostic_state_init(void);
 void diagnostic_state_final(void);
+
+/*
+ * Runtime configuration. Called from lib/app/diagnostic-config.c after
+ * the global YAML has been parsed. With enabled=false (or redis_url
+ * NULL/""), every set/del helper becomes a silent no-op.
+ *
+ * Safe to call multiple times; the existing connection is closed
+ * before the new URL is honoured.
+ */
+void diagnostic_state_configure(bool enabled, const char *redis_url);
 
 /* Radio access nodes. address is the SCTP peer address as an
  * already-formatted IPv4/IPv6 string. */

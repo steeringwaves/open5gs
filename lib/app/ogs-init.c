@@ -89,6 +89,11 @@ int ogs_app_initialize(
     rv = parse_config();
     if (rv != OGS_OK) return rv;
 
+    /* Fork-only: parse the top-level `diagnostic:` block and push it
+     * into libcore's broadcast + state modules. Isolated in
+     * lib/app/diagnostic-config.c for minimal merge footprint. */
+    diagnostic_config_parse();
+
     /**************************************************************************
      * Stage 3 : Initialize Default Memory Pool
      */

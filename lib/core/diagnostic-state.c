@@ -25,13 +25,14 @@
 #include <string.h>
 #include <time.h>
 
-#define DIAG_STATE_ENV "DIAG_REDIS_URL"
 #define DIAG_STATE_PREFIX "open5gs:live"
 
 typedef struct diag_state_s {
     bool initialized;
-    bool disabled;            /* DIAG_REDIS_URL unset → permanent no-op */
+    bool enabled;             /* set by diagnostic_state_configure() */
+    bool connect_attempted;   /* prevents tight reconnect loops */
     redisContext *redis;
+    char *uri;                /* full URL kept for re-parse on configure() */
     char *host;
     int port;
     int db;
@@ -96,25 +97,7 @@ static int ensure_redis_locked(void)
 {
     redisReply *r;
 
-    if (self.disabled) return -1;
-
-    if (!self.initialized) {
-        const char *uri = getenv(DIAG_STATE_ENV);
-        if (!uri || !*uri) {
-            self.disabled = true;
-            self.initialized = true;
-            return -1;
-        }
-        if (parse_redis_uri(uri, &self.host, &self.port,
-                    &self.db, &self.password) != 0) {
-            fprintf(stderr, "diag-state: invalid %s=%s — feature disabled\n",
-                    DIAG_STATE_ENV, uri);
-            self.disabled = true;
-            self.initialized = true;
-            return -1;
-        }
-        self.initialized = true;
-    }
+    if (!self.enabled || !self.host) return -1;
 
     if (self.redis && self.redis->err == 0) return 0;
     close_redis_locked();
@@ -154,22 +137,58 @@ static int ensure_redis_locked(void)
     return 0;
 }
 
-/* ---- Public init / final ---- */
+/* ---- Public init / configure / final ---- */
 void diagnostic_state_init(void)
 {
     if (self.initialized) return;
     pthread_mutex_init(&self.lock, NULL);
-    /* Connection is established lazily on first set/del call. */
+    self.initialized = true;
+    /* enabled stays false until diagnostic_state_configure() is called. */
+}
+
+void diagnostic_state_configure(bool enabled, const char *redis_url)
+{
+    if (!self.initialized) diagnostic_state_init();
+
+    pthread_mutex_lock(&self.lock);
+
+    /* Drop any prior connection + parsed URI before honouring the new
+     * configuration — caller may have flipped the redis URL. */
+    close_redis_locked();
+    if (self.uri)      { free(self.uri);      self.uri = NULL; }
+    if (self.host)     { free(self.host);     self.host = NULL; }
+    if (self.password) { free(self.password); self.password = NULL; }
+    self.port = 0;
+    self.db = 0;
+
+    self.enabled = enabled && redis_url && *redis_url;
+    if (!self.enabled) {
+        pthread_mutex_unlock(&self.lock);
+        return;
+    }
+
+    self.uri = strdup(redis_url);
+    if (parse_redis_uri(redis_url, &self.host, &self.port,
+                &self.db, &self.password) != 0) {
+        fprintf(stderr, "diag-state: invalid redis URL '%s' — disabled\n",
+                redis_url);
+        self.enabled = false;
+        if (self.uri) { free(self.uri); self.uri = NULL; }
+    }
+
+    pthread_mutex_unlock(&self.lock);
 }
 
 void diagnostic_state_final(void)
 {
+    if (!self.initialized) return;
     pthread_mutex_lock(&self.lock);
     close_redis_locked();
-    if (self.host) { free(self.host); self.host = NULL; }
+    if (self.uri)      { free(self.uri);      self.uri = NULL; }
+    if (self.host)     { free(self.host);     self.host = NULL; }
     if (self.password) { free(self.password); self.password = NULL; }
+    self.enabled = false;
     self.initialized = false;
-    self.disabled = false;
     pthread_mutex_unlock(&self.lock);
     pthread_mutex_destroy(&self.lock);
 }

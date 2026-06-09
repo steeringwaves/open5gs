@@ -381,22 +381,44 @@ each disconnect / release / remove path does a `DEL`. So the
 keyspace at any moment mirrors what's actually attached — no sidecar
 process needed.
 
-### Opt-in
+### Configuration
 
-Set the `DIAG_REDIS_URL` environment variable on each daemon you want
-publishing state. If it's unset or empty, the helpers are silent
-no-ops — same behaviour as before.
+Both the UDP broadcast and the Redis state mirror are configured from a
+top-level `diagnostic:` block in the daemon's YAML config (the same
+file you pass via `-c`). The parser lives in
+[`lib/app/diagnostic-config.c`](lib/app/diagnostic-config.c) and is
+called once from `ogs_app_initialize()` after the YAML has been read,
+before any NF state machine starts firing events.
 
-```sh
-# systemd drop-in for open5gs-amfd.service, etc.
-[Service]
-Environment=DIAG_REDIS_URL=redis://127.0.0.1:6379/1
+```yaml
+# /etc/open5gs/amf.yaml (also mme.yaml, smf.yaml, etc.)
+diagnostic:
+  broadcast:
+    enabled: true                   # default true (matches upstream)
+    address: 127.0.0.199            # default
+    port: 2287                      # default
+  state:
+    enabled: false                  # default false — opt-in
+    redis: redis://127.0.0.1:6379/1
 ```
 
-URL grammar matches the HSS state backend:
-`redis://[:password@]host[:port][/db]`. Use a different `/db` index
-(e.g. `/1`) from the HSS subscriber store (`/0`) if you want clean
-visual separation in `valkey-cli --scan`.
+Behaviour:
+
+- Both subsections are optional. **An unmodified config (no `diagnostic:`
+  block) behaves exactly like upstream** — UDP broadcast on, Redis state
+  off.
+- `broadcast.enabled: false` short-circuits `diagnostic_broadcast()` so
+  no UDP packets are sent. Useful when you want Redis-only visibility.
+- `state.enabled: true` requires `state.redis:` to be a non-empty
+  `redis://…` URL. If `enabled: true` but the URL is missing/invalid,
+  the parser logs an error and forces the feature off so the daemon
+  still boots.
+- URL grammar matches the HSS state backend:
+  `redis://[:password@]host[:port][/db]`. Use a different `/db` index
+  (e.g. `/1`) from the HSS subscriber store (`/0`) if you want clean
+  visual separation in `valkey-cli --scan`.
+- Configure each NF independently — you can have the AMF publish state
+  while the MME stays UDP-only, etc.
 
 ### Key schema
 
