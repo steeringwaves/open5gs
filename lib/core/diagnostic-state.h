@@ -33,6 +33,10 @@
 extern "C" {
 #endif
 
+/* Log domain — shows up as [diag] in daemon logs. Installed from
+ * ogs_core_initialize() at boot. */
+extern int __ogs_diag_domain;
+
 void diagnostic_state_init(void);
 void diagnostic_state_final(void);
 

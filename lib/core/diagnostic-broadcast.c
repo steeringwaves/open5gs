@@ -1,4 +1,6 @@
+#include "ogs-core.h"
 #include "diagnostic-broadcast.h"
+#include "diagnostic-state.h"  /* for __ogs_diag_domain */
 #include <arpa/inet.h>
 #include <stdarg.h>
 #include <stdbool.h>
@@ -7,6 +9,9 @@
 #include <string.h>
 #include <sys/socket.h>
 #include <unistd.h>
+
+#undef OGS_LOG_DOMAIN
+#define OGS_LOG_DOMAIN __ogs_diag_domain
 
 #define DIAG_DEFAULT_DEST_IP "127.0.0.199"
 #define DIAG_DEFAULT_DEST_PORT 2287
@@ -34,6 +39,12 @@ void diagnostic_broadcast_configure(bool enabled,
         cfg.address[sizeof(cfg.address) - 1] = '\0';
     }
     if (port > 0) cfg.port = port;
+
+    if (cfg.enabled)
+        ogs_info("broadcast: enabled, target udp://%s:%d",
+                cfg.address, cfg.port);
+    else
+        ogs_info("broadcast: disabled");
 }
 
 void diagnostic_broadcast_internal(const char *fmt, ...) {

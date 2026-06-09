@@ -25,12 +25,19 @@
 #include <string.h>
 #include <time.h>
 
+int __ogs_diag_domain;
+
+#undef OGS_LOG_DOMAIN
+#define OGS_LOG_DOMAIN __ogs_diag_domain
+
 #define DIAG_STATE_PREFIX "open5gs:live"
 
 typedef struct diag_state_s {
     bool initialized;
     bool enabled;             /* set by diagnostic_state_configure() */
-    bool connect_attempted;   /* prevents tight reconnect loops */
+    bool connected;           /* true between a successful connect and the
+                               * next close — gates the "connected" info
+                               * log so it only fires once per cycle */
     redisContext *redis;
     char *uri;                /* full URL kept for re-parse on configure() */
     char *host;
@@ -91,6 +98,7 @@ static void close_redis_locked(void)
         redisFree(self.redis);
         self.redis = NULL;
     }
+    self.connected = false;
 }
 
 static int ensure_redis_locked(void)
@@ -104,9 +112,10 @@ static int ensure_redis_locked(void)
 
     self.redis = redisConnect(self.host, self.port);
     if (!self.redis || self.redis->err) {
+        ogs_error("state: connect to %s:%d failed: %s",
+                self.host, self.port,
+                self.redis ? self.redis->errstr : "(alloc failed)");
         if (self.redis) {
-            fprintf(stderr, "diag-state: connect %s:%d failed: %s\n",
-                    self.host, self.port, self.redis->errstr);
             redisFree(self.redis);
             self.redis = NULL;
         }
@@ -116,7 +125,9 @@ static int ensure_redis_locked(void)
     if (self.password) {
         r = redisCommand(self.redis, "AUTH %s", self.password);
         if (!r || r->type == REDIS_REPLY_ERROR) {
-            fprintf(stderr, "diag-state: AUTH failed\n");
+            ogs_error("state: AUTH against %s:%d failed: %s",
+                    self.host, self.port,
+                    (r && r->str) ? r->str : "(no reply)");
             if (r) freeReplyObject(r);
             close_redis_locked();
             return -1;
@@ -127,12 +138,23 @@ static int ensure_redis_locked(void)
     if (self.db) {
         r = redisCommand(self.redis, "SELECT %d", self.db);
         if (!r || r->type == REDIS_REPLY_ERROR) {
-            fprintf(stderr, "diag-state: SELECT %d failed\n", self.db);
+            ogs_error("state: SELECT %d on %s:%d failed: %s",
+                    self.db, self.host, self.port,
+                    (r && r->str) ? r->str : "(no reply)");
             if (r) freeReplyObject(r);
             close_redis_locked();
             return -1;
         }
         freeReplyObject(r);
+    }
+
+    /* One-shot info log — fires on the first successful connect of each
+     * configure cycle. Reconnects after a Redis bounce will log again,
+     * so log lines reflect actual state transitions. */
+    if (!self.connected) {
+        ogs_info("state: connected to redis %s:%d/%d",
+                self.host, self.port, self.db);
+        self.connected = true;
     }
     return 0;
 }
@@ -163,6 +185,7 @@ void diagnostic_state_configure(bool enabled, const char *redis_url)
 
     self.enabled = enabled && redis_url && *redis_url;
     if (!self.enabled) {
+        ogs_info("state: disabled (state.enabled=false or no redis URL)");
         pthread_mutex_unlock(&self.lock);
         return;
     }
@@ -170,11 +193,19 @@ void diagnostic_state_configure(bool enabled, const char *redis_url)
     self.uri = strdup(redis_url);
     if (parse_redis_uri(redis_url, &self.host, &self.port,
                 &self.db, &self.password) != 0) {
-        fprintf(stderr, "diag-state: invalid redis URL '%s' — disabled\n",
+        ogs_error("state: invalid redis URL '%s' — feature disabled",
                 redis_url);
         self.enabled = false;
         if (self.uri) { free(self.uri); self.uri = NULL; }
+        pthread_mutex_unlock(&self.lock);
+        return;
     }
+
+    /* Boot-time confirmation that the YAML knobs landed. The actual
+     * TCP connect is deferred until the first set/del call —
+     * "connected to redis ..." follows from ensure_redis_locked(). */
+    ogs_info("state: enabled, redis target %s:%d/%d (lazy connect)",
+            self.host, self.port, self.db);
 
     pthread_mutex_unlock(&self.lock);
 }
@@ -207,12 +238,15 @@ static void exec_locked(const char *fmt, ...)
 
     if (!r) {
         /* Hiredis sets self.redis->err on transport failure. Drop the
-         * context so the next call reconnects. */
+         * context so the next call reconnects. The connect-failure log
+         * fires from ensure_redis_locked() on the next attempt. */
+        ogs_warn("state: redis command failed: %s",
+                self.redis ? self.redis->errstr : "(unknown)");
         close_redis_locked();
         return;
     }
     if (r->type == REDIS_REPLY_ERROR)
-        fprintf(stderr, "diag-state: %s\n", r->str);
+        ogs_warn("state: redis replied with error: %s", r->str);
     freeReplyObject(r);
 }
 

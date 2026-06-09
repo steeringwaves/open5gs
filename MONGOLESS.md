@@ -464,6 +464,66 @@ valkey-cli EVAL "return tonumber(ARGV[1]) - tonumber(redis.call('HGET', KEYS[1],
 valkey-cli PSUBSCRIBE 'open5gs:live:*'   # needs notify-keyspace-events; see §1.4
 ```
 
+### Log lines
+
+Both modules log under the `[diag]` domain, installed at boot from
+`ogs_core_initialize()`. Filter the daemon log to see what's happening:
+
+```sh
+grep '\[diag\]' /var/log/open5gs/amf.log
+```
+
+**Boot-time lines** (one shot per daemon, from
+`diagnostic_*_configure()`):
+
+```
+[diag] INFO: broadcast: enabled, target udp://127.0.0.199:2287
+[diag] INFO: state: enabled, redis target 127.0.0.1:6379/1 (lazy connect)
+```
+
+…or, when the YAML flips a feature off:
+
+```
+[diag] INFO: broadcast: disabled
+[diag] INFO: state: disabled (state.enabled=false or no redis URL)
+```
+
+…or, when the YAML is malformed:
+
+```
+[diag] ERROR: state: invalid redis URL 'redis_/host' — feature disabled
+```
+
+**First-use line** (fires on the first gNB connect / UE attach / session
+create, when the lazy Redis connect succeeds):
+
+```
+[diag] INFO: state: connected to redis 127.0.0.1:6379/1
+```
+
+If you do **not** see this line after a UE attaches, the configure
+went through but the TCP connect is failing — and you'll see an error
+on every set/del attempt instead:
+
+```
+[diag] ERROR: state: connect to 127.0.0.1:6379 failed: Connection refused
+[diag] ERROR: state: AUTH against 127.0.0.1:6379 failed: WRONGPASS …
+[diag] ERROR: state: SELECT 1 on 127.0.0.1:6379 failed: invalid DB index
+```
+
+**Runtime warnings** (Redis command-level errors, transient):
+
+```
+[diag] WARNING: state: redis command failed: Connection lost
+[diag] WARNING: state: redis replied with error: NOAUTH …
+```
+
+Reconnects after a Redis bounce will emit a fresh `connected to redis …`
+line, so the log accurately reflects every state transition. There is no
+log throttling — if Redis is down for hours, you'll see one error per
+gNB connect / UE attach / session create. That's intentional; a flapping
+backend that's losing live-state should be loud.
+
 ### Caveats
 
 - **Crash recovery.** If a daemon crashes mid-flight (segfault, OOM,

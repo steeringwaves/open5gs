@@ -51,6 +51,7 @@ void ogs_core_initialize(void)
     ogs_log_install_domain(&__ogs_thread_domain,
             "thread", ogs_core()->log.level);
     ogs_log_install_domain(&__ogs_tlv_domain, "tlv", ogs_core()->log.level);
+    ogs_log_install_domain(&__ogs_diag_domain, "diag", ogs_core()->log.level);
 }
 
 void ogs_core_terminate(void)
