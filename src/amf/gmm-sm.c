@@ -3159,8 +3159,11 @@ void gmm_state_initial_context_setup(ogs_fsm_t *s, amf_event_t *e)
                         amf_ue->supi ? amf_ue->supi : "",
                         amf_ue->suci ? amf_ue->suci : "",
                         amf_ue->imeisv_bcd ? amf_ue->imeisv_bcd : "");
+                /* imeisv_bcd is a fixed-size char array — bare pass-through
+                 * keeps gcc -Werror=address happy. An unset IMEISV reads
+                 * back as the empty string. */
                 diagnostic_state_ue_set(imsi_only,
-                        amf_ue->imeisv_bcd ? amf_ue->imeisv_bcd : "",
+                        amf_ue->imeisv_bcd,
                         amf_ue->supi ? amf_ue->supi : "",
                         amf_ue->suci ? amf_ue->suci : "");
             }

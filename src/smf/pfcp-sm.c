@@ -493,8 +493,10 @@ static void pfcp_restoration(ogs_pfcp_node_t *node)
             sess->session.name,
             sess->ipv4 ? OGS_INET_NTOP(&sess->ipv4->addr, buf1) : "",
             sess->ipv6 ? OGS_INET6_NTOP(&sess->ipv6->addr, buf2) : "");
+        /* imeisv_bcd is a fixed-size char array — bare pass-through
+         * keeps gcc -Werror=address happy. */
         diagnostic_state_session_set(smf_ue->imsi_bcd, sess->session.name,
-            smf_ue->imeisv_bcd ? smf_ue->imeisv_bcd : "",
+            smf_ue->imeisv_bcd,
             smf_ue->supi ? smf_ue->supi : "",
             sess->ipv4 ? OGS_INET_NTOP(&sess->ipv4->addr, buf1) : "",
             sess->ipv6 ? OGS_INET6_NTOP(&sess->ipv6->addr, buf2) : "");
