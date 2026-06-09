@@ -279,6 +279,63 @@ if Redis bounces, so a Redis restart only affects the daemon during the
 brief window before reconnect — reads transparently fall back to the
 in-memory mirror, and writes resume once the connection is back.
 
+### Redis state — disconnects and key lifecycle
+
+**The `open5gs:sub:<imsi>` HASH is never deleted and never expires.**
+Open5GS issues no `DEL`, no `EXPIRE`, no `TTL` against state keys —
+once written, the HASH persists for the life of the Redis dataset.
+
+This is intentional, not an oversight:
+
+- **`sqn` must persist across detach.** The whole point of storing it
+  in Redis is replay-attack prevention across the AKA flow. If the
+  key were deleted on detach, the next attach would re-read the YAML
+  default `sqn` (often `0` or a small seed) and the USIM would reject
+  the next auth as out-of-sync, forcing an AUTS resync round-trip —
+  the same outcome as not having persistence at all.
+- **`mme_host`/`mme_realm` carry "where was this UE last" semantics.**
+  HSS needs them on the *next* attach to send a Cancel-Location-Request
+  to the old MME. Deleting them on detach would leak a stale UE
+  context on the old MME.
+
+What actually happens during a disconnect:
+
+| Disconnect type | Effect on the Redis HASH |
+|---|---|
+| UE silently leaves coverage | Nothing — the HASH keeps the last-attached state |
+| Clean detach: MME sends S6a Purge-UE-Request | HSS calls `ogs_dbi_update_mme(…, purge_flag=true)` → `HSET … purge_flag 1`. Other fields unchanged. |
+| UE re-attaches at a new MME | HSS reads old `mme_host`/`realm` → sends CLR to that MME → writes new `mme_host`/`realm`, `purge_flag=0` |
+| AKA round-trip completes | HSS/UDR `HSET … sqn <new value>` (overwrites previous) |
+
+So `purge_flag` is the disconnect indicator — not key deletion.
+
+**Practical implications:**
+
+- **Keyspace size is bounded by your provisioned SIM count**, not by
+  active sessions. ~100 bytes per IMSI HASH; 10 k SIMs ≈ 1 MB — not a
+  memory concern for any realistic deployment.
+- **No churn, no eviction pressure under normal use.** Keys are
+  write-rarely: `sqn` a handful of times per session, `mme_host` once
+  per inter-MME handover, `imeisv` once per device swap.
+- **Orphans when you remove a SIM from `subscribers.yaml`**: the
+  matching Redis key becomes dead state. Open5GS won't clean it up.
+  It's harmless (just bytes), but if you care about reconciliation:
+
+  ```sh
+  # Drop one
+  valkey-cli DEL open5gs:sub:001010000000042
+
+  # Wipe everything (e.g. lab reset)
+  valkey-cli --scan --pattern 'open5gs:sub:*' | xargs valkey-cli DEL
+
+  # Reconcile: delete every Redis key whose IMSI is no longer in the YAML
+  comm -23 \
+      <(valkey-cli --scan --pattern 'open5gs:sub:*' \
+            | sed 's|^open5gs:sub:||' | sort) \
+      <(yq '.subscribers[].imsi' /etc/open5gs/subscribers.yaml | sort) \
+      | xargs -I{} valkey-cli DEL "open5gs:sub:{}"
+  ```
+
 ---
 
 ## 3. Building on Alpine
