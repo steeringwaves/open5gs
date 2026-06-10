@@ -627,6 +627,49 @@ What the option toggles:
 Everything in the source tree is gated with `#ifndef MONGOLESS` /
 `#ifdef MONGOLESS`, so a single tree compiles cleanly either way.
 
+### Other fork build options
+
+#### `per_apn_dns` — per-APN/per-DNN DNS servers
+
+Independent of the backend choice, the fork can hand **per-APN/per-DNN**
+DNS servers to UEs (via PCO/ePCO) instead of only the global `smf.dns`
+list. It is gated by the `per_apn_dns` meson option (default **true**),
+which injects a project-wide `-DPER_APN_DNS` define.
+
+```sh
+# Feature on (default)
+meson setup build
+
+# Restore upstream global-only DNS (matches v2.7.7-upstream)
+meson configure build -Dper_apn_dns=false
+ninja -C build
+```
+
+Configure DNS per `smf.session` entry; up to 5 IPv4 + 5 IPv6 servers per
+DNN, falling back to global `smf.dns` when a DNN has none:
+
+```yaml
+smf:
+  session:
+    - subnet: 10.46.0.0/16
+      gateway: 10.46.0.1
+      dnn: ims
+      dns: [1.1.1.1, 1.0.0.1, 2606:4700:4700::1111]
+```
+
+What the option toggles:
+
+| | `per_apn_dns=true` (default) | `per_apn_dns=false` |
+|---|---|---|
+| `-DPER_APN_DNS` (project-wide) | yes | no |
+| `OGS_MAX_NUM_OF_DNS` | 5 | undefined (global stays `MAX_NUM_OF_DNS`=2) |
+| Per-DNN `dns:` in `smf.session` | parsed | ignored (`unknown key` warn) |
+| `smf_pco_build()` signature | takes `smf_sess_t *sess` | upstream 3-arg form |
+
+Every change is wrapped in `#ifdef PER_APN_DNS` (upstream code preserved in
+the `#else` branch), so with the option off the tree is byte-for-byte
+upstream v2.7.7 — keeping merges from `v2.7.7-upstream` conflict-free.
+
 ### Dockerfile sketch
 
 A minimal Alpine Dockerfile fragment:

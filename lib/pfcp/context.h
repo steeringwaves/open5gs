@@ -368,6 +368,15 @@ typedef struct ogs_pfcp_subnet_s {
     ogs_ipsubnet_t  gw;                     /* Gateway : 2001:db8:cafe::1 */
     char            dnn[OGS_MAX_DNN_LEN+1]; /* DNN : "internet", "volte", .. */
 
+#ifdef PER_APN_DNS
+    /* Per-DNN DNS servers handed to the UE via PCO/ePCO.
+     * When empty, smf falls back to the global smf.dns configuration. */
+    const char      *dns[OGS_MAX_NUM_OF_DNS];
+    int             num_dns;
+    const char      *dns6[OGS_MAX_NUM_OF_DNS];
+    int             num_dns6;
+#endif
+
 #define OGS_MAX_NUM_OF_SUBNET_RANGE 16
     struct {
         const char *low;
@@ -517,6 +526,14 @@ void ogs_pfcp_subnet_remove(ogs_pfcp_subnet_t *subnet);
 void ogs_pfcp_subnet_remove_all(void);
 ogs_pfcp_subnet_t *ogs_pfcp_find_subnet(int family);
 ogs_pfcp_subnet_t *ogs_pfcp_find_subnet_by_dnn(int family, const char *dnn);
+
+#ifdef PER_APN_DNS
+/* Collect per-DNN DNS servers (of the given family) configured on the
+ * smf.session subnets matching 'dnn'. Returns the number written into 'dns'
+ * (capped at 'max'), or 0 when no per-DNN DNS is configured for that DNN. */
+int ogs_pfcp_find_dns_by_dnn(
+        int family, const char *dnn, const char **dns, int max);
+#endif
 
 void ogs_pfcp_pool_init(ogs_pfcp_sess_t *sess);
 void ogs_pfcp_pool_final(ogs_pfcp_sess_t *sess);

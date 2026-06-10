@@ -176,10 +176,29 @@ static int smf_context_validation(void)
     nf_instance = ogs_sbi_self()->nf_instance;
     ogs_assert(nf_instance);
 
+#ifdef PER_APN_DNS
+    if (self.dns[0] == NULL && self.dns6[0] == NULL) {
+        /* Global smf.dns may be omitted when DNS is configured per-DNN
+         * under smf.session. Accept the config if any subnet carries DNS. */
+        ogs_pfcp_subnet_t *subnet = NULL;
+        bool have_dns = false;
+        ogs_list_for_each(&ogs_pfcp_self()->subnet_list, subnet) {
+            if (subnet->num_dns || subnet->num_dns6) {
+                have_dns = true;
+                break;
+            }
+        }
+        if (!have_dns) {
+            ogs_error("No smf.dns in '%s'", ogs_app()->file);
+            return OGS_ERROR;
+        }
+    }
+#else
     if (self.dns[0] == NULL && self.dns6[0] == NULL) {
         ogs_error("No smf.dns in '%s'", ogs_app()->file);
         return OGS_ERROR;
     }
+#endif
     if (ogs_list_first(&ogs_gtp_self()->gtpu_list) == NULL) {
         ogs_error("No smf.gtpu.address in '%s'", ogs_app()->file);
         return OGS_ERROR;
@@ -528,6 +547,23 @@ int smf_context_parse_config(void)
                             rv = ogs_ipsubnet(&ipsub, v, NULL);
                             ogs_assert(rv == OGS_OK);
 
+#ifdef PER_APN_DNS
+                            if (ipsub.family == AF_INET) {
+                                int n;
+                                for (n = 0; n < OGS_MAX_NUM_OF_DNS &&
+                                        self.dns[n]; n++);
+                                if (n < OGS_MAX_NUM_OF_DNS) self.dns[n] = v;
+                                else ogs_warn("Ignore DNS : %s", v);
+                            }
+                            else if (ipsub.family == AF_INET6) {
+                                int n;
+                                for (n = 0; n < OGS_MAX_NUM_OF_DNS &&
+                                        self.dns6[n]; n++);
+                                if (n < OGS_MAX_NUM_OF_DNS) self.dns6[n] = v;
+                                else ogs_warn("Ignore DNS : %s", v);
+                            } else
+                                ogs_warn("Ignore DNS : %s", v);
+#else
                             if (ipsub.family == AF_INET) {
                                 if (self.dns[0] && self.dns[1])
                                     ogs_warn("Ignore DNS : %s", v);
@@ -541,6 +577,7 @@ int smf_context_parse_config(void)
                                 else self.dns6[0] = v;
                             } else
                                 ogs_warn("Ignore DNS : %s", v);
+#endif
                         }
 
                     } while (ogs_yaml_iter_type(&dns_iter) ==
@@ -3106,7 +3143,12 @@ static const uint8_t *ipcp_contains_option(
 #include "../version.h"
 static const char *pap_welcome = "Welcome to open5gs-smfd " OPEN5GS_VERSION;
 
+#ifdef PER_APN_DNS
+int smf_pco_build(
+        smf_sess_t *sess, uint8_t *pco_buf, uint8_t *buffer, int length)
+#else
 int smf_pco_build(uint8_t *pco_buf, uint8_t *buffer, int length)
+#endif
 {
     int rv;
     ogs_pco_t ue, smf;
@@ -3116,15 +3158,49 @@ int smf_pco_build(uint8_t *pco_buf, uint8_t *buffer, int length)
     ogs_pco_ipcp_t pco_ipcp[OGS_PCO_MAX_NUM_OF_IPCP];
     int num_of_ipcp;
     int pco_size = 0;
+#ifdef PER_APN_DNS
+    ogs_ipsubnet_t dns_primary, dns_secondary;
+    ogs_ipsubnet_t dns_buf[OGS_MAX_NUM_OF_DNS];
+    ogs_ipsubnet_t dns6_buf[OGS_MAX_NUM_OF_DNS];
+#else
     ogs_ipsubnet_t dns_primary, dns_secondary, dns6_primary, dns6_secondary;
+#endif
     ogs_ipsubnet_t p_cscf, p_cscf6;
     int size = 0;
     int i = 0;
     uint16_t mtu = 0;
 
+#ifdef PER_APN_DNS
+    /* Effective DNS servers for this session: per-DNN if configured under
+     * smf.session, otherwise the global smf.dns list. */
+    const char *dns[OGS_MAX_NUM_OF_DNS];
+    const char *dns6[OGS_MAX_NUM_OF_DNS];
+    int num_dns = 0, num_dns6 = 0;
+#endif
+
     ogs_assert(pco_buf);
     ogs_assert(buffer);
     ogs_assert(length);
+
+#ifdef PER_APN_DNS
+    memset(dns, 0, sizeof(dns));
+    memset(dns6, 0, sizeof(dns6));
+
+    if (sess && sess->session.name) {
+        num_dns = ogs_pfcp_find_dns_by_dnn(
+                AF_INET, sess->session.name, dns, OGS_MAX_NUM_OF_DNS);
+        num_dns6 = ogs_pfcp_find_dns_by_dnn(
+                AF_INET6, sess->session.name, dns6, OGS_MAX_NUM_OF_DNS);
+    }
+    if (num_dns == 0) {
+        for (i = 0; i < OGS_MAX_NUM_OF_DNS && smf_self()->dns[i]; i++)
+            dns[num_dns++] = smf_self()->dns[i];
+    }
+    if (num_dns6 == 0) {
+        for (i = 0; i < OGS_MAX_NUM_OF_DNS && smf_self()->dns6[i]; i++)
+            dns6[num_dns6++] = smf_self()->dns6[i];
+    }
+#endif
 
     num_of_ipcp = 0;
     memset(&pco_ipcp, 0, sizeof(pco_ipcp));
@@ -3187,7 +3263,11 @@ int smf_pco_build(uint8_t *pco_buf, uint8_t *buffer, int length)
                 uint16_t out_len = 0;
                 int num_of_option = 0;
 
+#ifdef PER_APN_DNS
+                ogs_assert(num_dns > 0);
+#else
                 ogs_assert(smf_self()->dns[0] || smf_self()->dns[1]);
+#endif
 
                 ogs_assert(ipcp);
                 in_len = be16toh(ipcp->len);
@@ -3198,11 +3278,22 @@ int smf_pco_build(uint8_t *pco_buf, uint8_t *buffer, int length)
 
                 out_len = 4;
                 /* Primary DNS Server IP Address */
-                if (smf_self()->dns[0] &&
+                if (
+#ifdef PER_APN_DNS
+                    num_dns > 0 && dns[0] &&
+#else
+                    smf_self()->dns[0] &&
+#endif
                     ipcp_contains_option(ipcp, in_len,
                         OGS_IPCP_OPT_PRIMARY_DNS, 4)) {
                     rv = ogs_ipsubnet(
-                            &dns_primary, smf_self()->dns[0], NULL);
+                            &dns_primary,
+#ifdef PER_APN_DNS
+                            dns[0],
+#else
+                            smf_self()->dns[0],
+#endif
+                            NULL);
                     ogs_assert(rv == OGS_OK);
                     ogs_assert(
                             num_of_option <= OGS_PCO_MAX_NUM_OF_IPCP_OPTIONS);
@@ -3217,11 +3308,22 @@ int smf_pco_build(uint8_t *pco_buf, uint8_t *buffer, int length)
                 }
 
                 /* Secondary DNS Server IP Address */
-                if (smf_self()->dns[1] &&
+                if (
+#ifdef PER_APN_DNS
+                    num_dns > 1 && dns[1] &&
+#else
+                    smf_self()->dns[1] &&
+#endif
                     ipcp_contains_option(ipcp, in_len,
                         OGS_IPCP_OPT_SECONDARY_DNS, 4)) {
                     rv = ogs_ipsubnet(
-                            &dns_secondary, smf_self()->dns[1], NULL);
+                            &dns_secondary,
+#ifdef PER_APN_DNS
+                            dns[1],
+#else
+                            smf_self()->dns[1],
+#endif
+                            NULL);
                     ogs_assert(rv == OGS_OK);
                     ogs_assert(
                             num_of_option <= OGS_PCO_MAX_NUM_OF_IPCP_OPTIONS);
@@ -3247,6 +3349,20 @@ int smf_pco_build(uint8_t *pco_buf, uint8_t *buffer, int length)
             }
             break;
         case OGS_PCO_ID_DNS_SERVER_IPV4_ADDRESS_REQUEST:
+#ifdef PER_APN_DNS
+            {
+                int j;
+                /* One container per DNS server (up to OGS_MAX_NUM_OF_DNS) */
+                for (j = 0; j < num_dns; j++) {
+                    rv = ogs_ipsubnet(&dns_buf[j], dns[j], NULL);
+                    ogs_assert(rv == OGS_OK);
+                    smf.ids[smf.num_of_id].id = ue.ids[i].id;
+                    smf.ids[smf.num_of_id].len = OGS_IPV4_LEN;
+                    smf.ids[smf.num_of_id].data = dns_buf[j].sub;
+                    smf.num_of_id++;
+                }
+            }
+#else
             if (smf_self()->dns[0]) {
                 rv = ogs_ipsubnet(
                         &dns_primary, smf_self()->dns[0], NULL);
@@ -3266,8 +3382,23 @@ int smf_pco_build(uint8_t *pco_buf, uint8_t *buffer, int length)
                 smf.ids[smf.num_of_id].data = dns_secondary.sub;
                 smf.num_of_id++;
             }
+#endif
             break;
         case OGS_PCO_ID_DNS_SERVER_IPV6_ADDRESS_REQUEST:
+#ifdef PER_APN_DNS
+            {
+                int j;
+                /* One container per DNS server (up to OGS_MAX_NUM_OF_DNS) */
+                for (j = 0; j < num_dns6; j++) {
+                    rv = ogs_ipsubnet(&dns6_buf[j], dns6[j], NULL);
+                    ogs_assert(rv == OGS_OK);
+                    smf.ids[smf.num_of_id].id = ue.ids[i].id;
+                    smf.ids[smf.num_of_id].len = OGS_IPV6_LEN;
+                    smf.ids[smf.num_of_id].data = dns6_buf[j].sub;
+                    smf.num_of_id++;
+                }
+            }
+#else
             if (smf_self()->dns6[0]) {
                 rv = ogs_ipsubnet(
                         &dns6_primary, smf_self()->dns6[0], NULL);
@@ -3287,6 +3418,7 @@ int smf_pco_build(uint8_t *pco_buf, uint8_t *buffer, int length)
                 smf.ids[smf.num_of_id].data = dns6_secondary.sub;
                 smf.num_of_id++;
             }
+#endif
             break;
         case OGS_PCO_ID_P_CSCF_IPV4_ADDRESS_REQUEST:
             if (smf_self()->num_of_p_cscf) {

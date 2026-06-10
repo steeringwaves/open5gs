@@ -764,9 +764,16 @@ int ogs_pfcp_context_parse_config(const char *local, const char *remote)
                         const char *low[OGS_MAX_NUM_OF_SUBNET_RANGE];
                         const char *high[OGS_MAX_NUM_OF_SUBNET_RANGE];
                         int i, num = 0;
+#ifdef PER_APN_DNS
+                        const char *dns[OGS_MAX_NUM_OF_DNS*2];
+                        int num_dns = 0;
+#endif
 
                         memset(low, 0, sizeof(low));
                         memset(high, 0, sizeof(high));
+#ifdef PER_APN_DNS
+                        memset(dns, 0, sizeof(dns));
+#endif
 
                         if (ogs_yaml_iter_type(&subnet_array) ==
                                 YAML_MAPPING_NODE) {
@@ -803,6 +810,33 @@ int ogs_pfcp_context_parse_config(const char *local, const char *remote)
                                 dnn = ogs_yaml_iter_value(&subnet_iter);
                             } else if (!strcmp(subnet_key, "dev")) {
                                 dev = ogs_yaml_iter_value(&subnet_iter);
+#ifdef PER_APN_DNS
+                            } else if (!strcmp(subnet_key, "dns")) {
+                                ogs_yaml_iter_t dns_iter;
+                                ogs_yaml_iter_recurse(
+                                        &subnet_iter, &dns_iter);
+                                ogs_assert(ogs_yaml_iter_type(&dns_iter) !=
+                                    YAML_MAPPING_NODE);
+                                do {
+                                    const char *v = NULL;
+
+                                    if (ogs_yaml_iter_type(&dns_iter) ==
+                                            YAML_SEQUENCE_NODE) {
+                                        if (!ogs_yaml_iter_next(&dns_iter))
+                                            break;
+                                    }
+
+                                    v = ogs_yaml_iter_value(&dns_iter);
+                                    if (v && strlen(v)) {
+                                        if (num_dns <
+                                                OGS_MAX_NUM_OF_DNS*2)
+                                            dns[num_dns++] = v;
+                                        else
+                                            ogs_warn("Ignore DNS : %s", v);
+                                    }
+                                } while (ogs_yaml_iter_type(&dns_iter) ==
+                                            YAML_SEQUENCE_NODE);
+#endif
                             } else if (!strcmp(subnet_key, "range")) {
                                 ogs_yaml_iter_t range_iter;
                                 ogs_yaml_iter_recurse(
@@ -850,6 +884,29 @@ int ogs_pfcp_context_parse_config(const char *local, const char *remote)
                             subnet->range[i].low = low[i];
                             subnet->range[i].high = high[i];
                         }
+
+#ifdef PER_APN_DNS
+                        /* Split per-DNN DNS by address family */
+                        for (i = 0; i < num_dns; i++) {
+                            ogs_ipsubnet_t ipsub;
+                            if (ogs_ipsubnet(&ipsub, dns[i], NULL) != OGS_OK) {
+                                ogs_warn("Ignore DNS : %s", dns[i]);
+                                continue;
+                            }
+                            if (ipsub.family == AF_INET) {
+                                if (subnet->num_dns < OGS_MAX_NUM_OF_DNS)
+                                    subnet->dns[subnet->num_dns++] = dns[i];
+                                else
+                                    ogs_warn("Ignore DNS : %s", dns[i]);
+                            } else if (ipsub.family == AF_INET6) {
+                                if (subnet->num_dns6 < OGS_MAX_NUM_OF_DNS)
+                                    subnet->dns6[subnet->num_dns6++] = dns[i];
+                                else
+                                    ogs_warn("Ignore DNS : %s", dns[i]);
+                            } else
+                                ogs_warn("Ignore DNS : %s", dns[i]);
+                        }
+#endif
 
                     } while (ogs_yaml_iter_type(&subnet_array) ==
                             YAML_SEQUENCE_NODE);
@@ -2546,6 +2603,47 @@ ogs_pfcp_subnet_t *ogs_pfcp_find_subnet_by_dnn(int family, const char *dnn)
 
     return subnet;
 }
+
+#ifdef PER_APN_DNS
+int ogs_pfcp_find_dns_by_dnn(
+        int family, const char *dnn, const char **dns, int max)
+{
+    ogs_pfcp_subnet_t *subnet = NULL;
+    int n = 0;
+
+    ogs_assert(dns);
+    ogs_assert(family == AF_INET || family == AF_INET6);
+
+    if (!dnn) return 0;
+
+    /* DNS may be configured on either the IPv4 or IPv6 subnet entry of a
+     * DNN, so match by DNN name regardless of the subnet's own family and
+     * return the first matching entry that has DNS of the requested family. */
+    ogs_list_for_each(&self.subnet_list, subnet) {
+        const char **src;
+        int num, i;
+
+        if (strlen(subnet->dnn) == 0 ||
+                ogs_strcasecmp(subnet->dnn, dnn) != 0)
+            continue;
+
+        if (family == AF_INET) {
+            src = subnet->dns;
+            num = subnet->num_dns;
+        } else {
+            src = subnet->dns6;
+            num = subnet->num_dns6;
+        }
+
+        for (i = 0; i < num && n < max; i++)
+            dns[n++] = src[i];
+
+        if (n) break;
+    }
+
+    return n;
+}
+#endif
 
 void ogs_pfcp_pool_init(ogs_pfcp_sess_t *sess)
 {

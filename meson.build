@@ -121,6 +121,12 @@ add_project_arguments(
     cc.get_supported_arguments(possible_cc_flags),
     language : 'c')
 
+# Fork-only: gate the per-APN/per-DNN DNS feature project-wide so a single
+# define toggles every #ifdef PER_APN_DNS site across lib/ and src/.
+if get_option('per_apn_dns')
+    add_project_arguments('-DPER_APN_DNS', language : 'c')
+endif
+
 subdir('configs')
 subdir('lib')
 subdir('src')
