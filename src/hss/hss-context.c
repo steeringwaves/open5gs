@@ -1361,6 +1361,7 @@ char *hss_cx_download_user_data(
     return user_data;
 }
 
+#ifndef MONGOLESS
 static int poll_change_stream(void);
 static int process_change_stream(const bson_t *document);
 
@@ -1376,7 +1377,15 @@ int hss_db_poll_change_stream(void)
 
     return rv;
 }
+#else
+/* MONGOLESS: change-stream polling is a no-op. */
+int hss_db_poll_change_stream(void)
+{
+    return OGS_OK;
+}
+#endif
 
+#ifndef MONGOLESS
 static int poll_change_stream(void)
 {
 #if MONGOC_CHECK_VERSION(1, 9, 0)
@@ -1541,3 +1550,11 @@ int hss_handle_change_event(const bson_t *document)
 
     return OGS_OK;
 }
+#else /* MONGOLESS */
+/* Stubbed replacement that swallows the call cleanly. */
+int hss_handle_change_event(const void *document)
+{
+    (void)document;
+    return OGS_OK;
+}
+#endif /* !MONGOLESS */

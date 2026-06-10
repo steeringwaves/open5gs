@@ -1287,6 +1287,10 @@ void amf_gnb_remove(amf_gnb_t *gnb)
     ogs_assert(gnb);
     ogs_assert(gnb->sctp.sock);
 
+    char buf[OGS_ADDRSTRLEN];
+    diagnostic_broadcast("{\"Command\":\"gNB Disconnect\",\"Address\":\"%s\"}", OGS_ADDR(gnb->sctp.addr, buf));
+    diagnostic_state_gnb_del(OGS_ADDR(gnb->sctp.addr, buf));
+
     ogs_list_remove(&self.gnb_list, gnb);
 
     memset(&e, 0, sizeof(e));
@@ -1419,11 +1423,34 @@ ran_ue_t *ran_ue_add(amf_gnb_t *gnb, uint64_t ran_ue_ngap_id)
 void ran_ue_remove(ran_ue_t *ran_ue)
 {
     amf_gnb_t *gnb = NULL;
+    amf_ue_t *amf_ue = NULL;
 
     ogs_assert(ran_ue);
 
-    gnb = amf_gnb_find_by_id(ran_ue->gnb_id);
+    /* Look up amf_ue independently of gnb. On gNB SCTP shutdown with
+     * an active PDU session, amf_gnb_remove() frees the gnb pool slot
+     * BEFORE the async SMF deactivate response triggers ran_ue_remove()
+     * — so gnb is NULL here even though the UE context still exists
+     * and we still want to emit a UE Release event. */
+    amf_ue = amf_ue_find_by_id(ran_ue->amf_ue_id);
+    if (amf_ue) {
+        /* Strip the SUPI type prefix so the IMSI field matches the
+         * format the SMF / MME already emit. */
+        const char *imsi_only =
+                (amf_ue->supi && !strncmp(amf_ue->supi, "imsi-", 5))
+                ? amf_ue->supi + 5 : "";
+        diagnostic_broadcast(
+                "{\"Command\":\"UE Release\","
+                "\"IMSI\":\"%s\",\"IMEI\":\"%s\","
+                "\"SUPI\":\"%s\",\"SUCI\":\"%s\"}",
+                imsi_only,
+                amf_ue->imeisv_bcd ? amf_ue->imeisv_bcd : "",
+                amf_ue->supi ? amf_ue->supi : "",
+                amf_ue->suci ? amf_ue->suci : "");
+        diagnostic_state_ue_del(imsi_only);
+    }
 
+    gnb = amf_gnb_find_by_id(ran_ue->gnb_id);
     if (gnb) ogs_list_remove(&gnb->ran_ue_list, ran_ue);
 
     ogs_assert(ran_ue->t_ng_holding);

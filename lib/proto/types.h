@@ -104,6 +104,9 @@ extern "C" {
 #define OGS_MAX_NUM_OF_HOSTNAME         16
 #define OGS_MAX_DNN_LEN                 100
 #define OGS_MAX_APN_LEN                 OGS_MAX_DNN_LEN
+#ifdef PER_APN_DNS
+#define OGS_MAX_NUM_OF_DNS              5
+#endif
 #define OGS_MAX_PCO_LEN                 251
 #define OGS_MAX_EPCO_LEN                65535
 #define OGS_MAX_FQDN_LEN                256

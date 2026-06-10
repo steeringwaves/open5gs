@@ -124,9 +124,14 @@ typedef struct smf_context_s {
     const char*         diam_conf_path;   /* SMF Diameter conf path */
     ogs_diam_config_t   *diam_config;     /* SMF Diameter config */
 
+#ifdef PER_APN_DNS
+    const char      *dns[OGS_MAX_NUM_OF_DNS];
+    const char      *dns6[OGS_MAX_NUM_OF_DNS];
+#else
 #define MAX_NUM_OF_DNS              2
     const char      *dns[MAX_NUM_OF_DNS];
     const char      *dns6[MAX_NUM_OF_DNS];
+#endif
 
 #define MAX_NUM_OF_P_CSCF           16
     char            *p_cscf[MAX_NUM_OF_P_CSCF];
@@ -807,7 +812,12 @@ smf_pf_t *smf_pf_find_by_flow(
 smf_pf_t *smf_pf_first(smf_bearer_t *bearer);
 smf_pf_t *smf_pf_next(smf_pf_t *pf);
 
+#ifdef PER_APN_DNS
+int smf_pco_build(
+        smf_sess_t *sess, uint8_t *pco_buf, uint8_t *buffer, int length);
+#else
 int smf_pco_build(uint8_t *pco_buf, uint8_t *buffer, int length);
+#endif
 
 void smf_qfi_pool_init(smf_sess_t *sess);
 void smf_qfi_pool_final(smf_sess_t *sess);

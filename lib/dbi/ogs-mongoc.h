@@ -24,11 +24,22 @@
 #ifndef OGS_MONGOC_H
 #define OGS_MONGOC_H
 
+#ifndef MONGOLESS
 #include <mongoc.h>
+#endif
 
 #ifdef __cplusplus
 extern "C" {
 #endif /* __cplusplus */
+
+#ifdef MONGOLESS
+/* Stub MONGOC_CHECK_VERSION so existing `#if MONGOC_CHECK_VERSION(..)` gates
+ * in HSS / config-parsing code evaluate to 0 without modification. The real
+ * macro is provided by <mongoc.h> in non-MONGOLESS builds. */
+#define MONGOC_CHECK_VERSION(major, minor, micro) 0
+#endif
+
+#ifndef MONGOLESS
 
 typedef struct ogs_mongoc_s {
     bool initialized;
@@ -51,6 +62,8 @@ typedef struct ogs_mongoc_s {
 int ogs_mongoc_init(const char *db_uri);
 void ogs_mongoc_final(void);
 ogs_mongoc_t *ogs_mongoc(void);
+
+#endif /* !MONGOLESS */
 
 int ogs_dbi_init(const char *db_uri);
 void ogs_dbi_final(void);

@@ -26,6 +26,8 @@
 
 #define OGS_USE_TALLOC 1
 
+#include "core/diagnostic-broadcast.h"
+#include "core/diagnostic-state.h"
 #include "core/ogs-compat.h"
 #include "core/ogs-macros.h"
 #include "core/ogs-list.h"

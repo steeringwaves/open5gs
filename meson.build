@@ -121,12 +121,24 @@ add_project_arguments(
     cc.get_supported_arguments(possible_cc_flags),
     language : 'c')
 
+# Fork-only: gate the per-APN/per-DNN DNS feature project-wide so a single
+# define toggles every #ifdef PER_APN_DNS site across lib/ and src/.
+if get_option('per_apn_dns')
+    add_project_arguments('-DPER_APN_DNS', language : 'c')
+endif
+
 subdir('configs')
 subdir('lib')
 subdir('src')
 subdir('misc')
 # Don't build the tests unless we can run them (either natively or in an exe wrapper)
 build_tests = not meson.is_cross_build() or (meson.is_cross_build() and meson.has_exe_wrapper())
+# mongoless: tests/common builds BSON documents directly against libmongoc.
+# Skip them when MONGOLESS is on; reinstate by porting tests/common/context.c
+# to write YAML/Redis instead.
+if get_option('mongoless')
+    build_tests = false
+endif
 if build_tests
     subdir('tests')
 endif

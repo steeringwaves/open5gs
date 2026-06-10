@@ -1,0 +1,964 @@
+# Mongoless Open5GS (fork)
+
+This branch replaces the MongoDB-backed subscriber catalog with a flat
+YAML file plus an optional Redis state store. It is **not intended to
+merge upstream** — the original MongoDB sources are kept in-tree but
+gated under `#if 0` so that pulling upstream bug fixes stays painless.
+
+- **Static subscriber data** (IMSI, security keys, slices, sessions, PCC
+  rules, MSISDN, iFC) lives in a hand-edited YAML file.
+- **Mutable per-subscriber state** (sqn, mme_host, mme_realm, purge_flag,
+  imeisv) lives in Redis, falling back to process memory if no Redis is
+  configured.
+- **Hot reload**: an inotify+timerfd watcher reparses the YAML 2 s after
+  the last write (trailing-edge debounce), so editor saves that touch
+  the file in several syscalls only fire one reload.
+
+The public `ogs_dbi_*` API is unchanged — HSS, UDR, PCRF, and PCF call
+the same functions they always did.
+
+---
+
+## 1. Configuration
+
+### `db_uri`
+
+In every NF config (`hss.yaml`, `udr.yaml`, etc.) replace the MongoDB URI
+with a path to the YAML file:
+
+```yaml
+# was:
+# db_uri: mongodb://localhost/open5gs
+db_uri: file:///etc/open5gs/subscribers.yaml
+# or just a bare path:
+# db_uri: /etc/open5gs/subscribers.yaml
+```
+
+A `mongodb://` URI is rejected at startup with a clear error so a stale
+config is obvious.
+
+### `subscribers.yaml`
+
+Schema mirrors the original MongoDB subscriber document — field names
+are identical, so a Mongo doc can be hand-translated 1:1.
+
+A canonical example lives at
+[`configs/subscribers.yaml.in`](configs/subscribers.yaml.in). Minimal
+working file:
+
+```yaml
+state:
+  # Optional. Omit to keep dynamic state in-memory only.
+  redis: redis://127.0.0.1:6379/0
+
+subscribers:
+  - imsi: "001010000000001"
+    msisdn:
+      - "0000000001"
+    access_restriction_data: 32
+    subscriber_status: 0
+    network_access_mode: 2
+    subscribed_rau_tau_timer: 12
+
+    ambr:
+      downlink: { value: 1, unit: 3 }   # 1 Gbps
+      uplink:   { value: 1, unit: 3 }
+
+    security:
+      k:   "465B5CE8B199B49FAA5F0A2EE238A6BC"
+      opc: "E8ED289DEBA952E4283B54E88E6183CA"
+      amf: "8000"
+      sqn: 64
+
+    slice:
+      - sst: 1
+        default_indicator: true
+        session:
+          - name: "internet"
+            type: 3              # 1=IPv4, 2=IPv6, 3=IPv4v6
+            qos:
+              index: 9
+              arp:
+                priority_level: 8
+                pre_emption_capability: 1
+                pre_emption_vulnerability: 1
+            ambr:
+              downlink: { value: 1, unit: 3 }
+              uplink:   { value: 1, unit: 3 }
+```
+
+**Bitrate units** (matches MongoDB convention): 0=bps, 1=Kbps, 2=Mbps,
+3=Gbps, 4=Tbps. `value × 1000^unit`.
+
+### State backend
+
+```yaml
+state:
+  redis: redis://[:password@]host[:port][/db]
+```
+
+- `redis://127.0.0.1:6379/0` — local Redis on the default DB.
+- `redis://:s3cret@redis.internal:6379/2` — with password and DB 2.
+- Omit `state.redis` entirely → state lives in process memory and is
+  lost on restart (fine for lab/test, breaks LTE auth resync for real
+  UEs across restarts).
+
+On Redis connection failure at boot, the daemon logs an error and
+silently falls back to in-memory. The connection is reattempted on
+every read/write so a Redis that comes up later starts being used
+without restarting the daemon.
+
+Redis layout: one HASH per subscriber, key
+`open5gs:sub:<imsi>`, fields `sqn`, `mme_host`, `mme_realm`,
+`purge_flag`, `imeisv`.
+
+```
+redis-cli> HGETALL open5gs:sub:001010000000001
+1) "sqn"
+2) "96"
+3) "mme_host"
+4) "mme0.epc.mnc070.mcc999.3gppnetwork.org"
+...
+```
+
+### Using Valkey instead of Redis
+
+Valkey is a wire-compatible fork of Redis 7.2 — the `hiredis` client
+in this fork talks to it without any code change. Point `state.redis:`
+at the Valkey port (default `6379`, same as Redis) and you're done.
+The `redis://` URI scheme is just the client-library identifier; there
+is no `valkey://` variant to switch to.
+
+**Do you need to touch the `LATENCY TRACKING` and `EVENT NOTIFICATION`
+sections of `valkey.conf`? No — the defaults are correct for us.**
+
+- `latency-tracking yes` (default) — server-side observability for the
+  `INFO latencystats` / `LATENCY` commands. Open5GS never calls them,
+  so the setting only affects whether Valkey itself maintains those
+  counters. Leave the default; the overhead is negligible.
+- `notify-keyspace-events ""` (default) — controls Valkey's pub/sub
+  keyspace notifications. Open5GS does **not** `SUBSCRIBE` to any
+  Valkey events (the only watcher we run is the inotify watcher on
+  `subscribers.yaml`). Leave the default empty; turning it on would
+  generate keyspace traffic that nothing reads.
+
+**What you *should* configure:**
+
+| Setting | Why |
+|---|---|
+| `appendonly yes` *or* keep default `save` snapshots | We rely on `sqn` / `mme_host` / `mme_realm` / `purge_flag` / `imeisv` surviving a Valkey restart. Without persistence, every Valkey restart triggers an AUTS resync round-trip per real UE. Default RDB snapshots (`save 3600 1 300 100 60 10000`) are fine for lab use; AOF is safer for production — the loss window shrinks to ≤1 s. |
+| `maxmemory-policy noeviction` *if* you set `maxmemory` | If Valkey starts evicting under memory pressure, you'd silently drop `sqn` state for whatever subscribers get picked and break AKA for those UEs until the next AUTS resync. Our keyspace is tiny (~100 bytes × subscriber count), so don't set `maxmemory` at all unless you have to — and if you must, force `noeviction` so writes fail loudly instead of corrupting state. |
+| `requirepass` / ACLs | Optional. If set, put credentials in the `state.redis:` URI: `redis://:secret@host:6379/0` or `redis://username:secret@host:6379/0` (our hiredis client parses both forms). |
+
+**Minimal `valkey.conf` delta — everything else can stay at upstream
+defaults:**
+
+```conf
+# Persistence — pick one or both:
+appendonly yes                         # AOF: ≤1s data-loss window
+# save 3600 1 300 100 60 10000        # RDB snapshots: bigger window, less I/O
+
+# Only set these if you actually constrain memory:
+# maxmemory 256mb
+# maxmemory-policy noeviction
+
+# Bind / auth (optional):
+# bind 127.0.0.1
+# requirepass <something>
+
+# Defaults — do NOT need to change:
+# latency-tracking yes
+# notify-keyspace-events ""
+```
+
+Inspecting state works identically to Redis — same wire protocol, same
+commands:
+
+```sh
+valkey-cli PING                                  # → PONG
+valkey-cli KEYS 'open5gs:sub:*'
+valkey-cli HGETALL open5gs:sub:001010000000001
+valkey-cli MONITOR                               # live wire trace during attach
+```
+
+### Hot reload
+
+The YAML file is watched with `inotify` on its parent directory (so
+atomic save-by-rename is caught even though the inode changes). After
+each matching event a 2-second one-shot timer is rearmed; only when no
+further event arrives for 2 seconds does the file get re-parsed.
+
+Reloads are atomic from a reader's perspective — the cache mutex is
+held for the full duration of the swap, and readers walking YAML node
+pointers block briefly during it. A YAML parse error during reload is
+logged and the previously-loaded catalog is kept intact.
+
+To change the debounce window, edit `OGS_FLATFILE_WATCHER_DEBOUNCE_MS`
+in [`lib/dbi/ogs-flatfile-watcher.h`](lib/dbi/ogs-flatfile-watcher.h).
+
+---
+
+## 2. Runtime data flow
+
+### `subscribers.yaml` — who reads it and when
+
+`ogs_dbi_init(db_uri)` is called **once at process start** by each of:
+
+| NF | Call site |
+|---|---|
+| HSS (EPC) | [`src/hss/hss-init.c`](src/hss/hss-init.c) |
+| UDR (5GC) | [`src/udr/init.c`](src/udr/init.c) |
+| PCRF (EPC) | [`src/pcrf/pcrf-init.c`](src/pcrf/pcrf-init.c) |
+| PCF (5GC) | [`src/pcf/init.c`](src/pcf/init.c) |
+
+That single call parses the YAML, builds in-memory `imsi → yaml_node_t*`
+and `msisdn → yaml_node_t*` indexes, and starts an inotify watcher on
+the file's parent directory. **Each daemon process keeps its own
+private cache and runs its own watcher** — there is no shared
+read-through layer.
+
+After startup, requests hit the in-memory cache (no disk I/O):
+
+| NF | Functions called | Fired on |
+|---|---|---|
+| HSS | `ogs_dbi_auth_info` | S6a Authentication-Information-Request |
+|  | `ogs_dbi_subscription_data` | S6a Update-Location-Request |
+|  | `ogs_dbi_msisdn_data` | Cx / Sh by MSISDN |
+|  | `ogs_dbi_ims_data` | Cx Server-Assignment-Request (iFC download) |
+| UDR | `ogs_dbi_auth_info` | Nudr GET `/auth-data` from AUSF/UDM |
+|  | `ogs_dbi_subscription_data` | Nudr GET `/provisioned-data` from UDM/PCF |
+| PCRF | `ogs_dbi_session_data` | Gx CCR-Initial |
+| PCF | `ogs_dbi_session_data` | Npcf SM-Policy Create |
+|  | `ogs_dbi_subscription_data` | Npcf AM-Policy Create |
+
+The inotify watcher fires when `subscribers.yaml` is modified;
+**2 s after the last write** the cache is rebuilt under the cache
+mutex. Readers block briefly during the swap. If the new file fails
+to parse, the previous catalog is kept and an error is logged
+([`ogs-flatfile.c`](lib/dbi/ogs-flatfile.c) `on_yaml_changed`).
+
+### Redis state — who writes it and what
+
+All mutable per-subscriber data lives in the Redis HASH
+`open5gs:sub:<imsi>`. The set is small and write-only from a daemon
+perspective:
+
+| Field | Written by | Fired on | Implementation |
+|---|---|---|---|
+| `sqn` | HSS | After every successful AKA challenge over S6a | `ogs_dbi_update_sqn` ← `hss_db_update_sqn` |
+|  | UDR | After every AuthEvent PATCH from UDM/AUSF | `ogs_dbi_update_sqn` ← `udr_nudr_dr_handle_subscription_authentication` |
+|  | HSS / UDR | On AUTS resync (USIM detected out-of-sync) | `ogs_dbi_increment_sqn` — bumps by 32, masks to 48 bits |
+| `mme_host`, `mme_realm`, `purge_flag` | **HSS only** | S6a Update-Location-Request when a UE registers to a new MME | `ogs_dbi_update_mme` ← `hss_db_update_mme` |
+| `imeisv` | HSS | When the UE reports IMEISV during attach | `ogs_dbi_update_imeisv` |
+|  | UDR | When UDM PUTs the UE's identity context (IMEI/IMEISV) | `ogs_dbi_update_imeisv` |
+
+Notes:
+- **5GC-only** deployments never run an HSS — only UDR writes.
+- **EPC-only** deployments never run a UDR — only HSS writes.
+- **Hybrid** (4G + 5G NSA/SA) — both write to the same key under their
+  respective auth paths; the field semantics are identical so they
+  don't clobber each other meaningfully.
+- Every write goes through `ogs_flatfile_state_set_*` in
+  [`lib/dbi/ogs-flatfile-state.c`](lib/dbi/ogs-flatfile-state.c) which
+  writes to Redis **and** the in-memory mirror, so reads stay correct
+  even if Redis is temporarily down.
+
+### Redis state — who reads it and what for
+
+Reads happen inside the dbi getter functions, which transparently
+overlay Redis-persisted values on top of the YAML defaults:
+
+| Field | Read by | What the value drives |
+|---|---|---|
+| `sqn` | `ogs_dbi_auth_info` (HSS, UDR) | Returned as the current AKA sequence number when generating the next auth vector. The USIM rejects the challenge as "synch failure" if this doesn't match its own counter — so without Redis persistence, every restart triggers an AUTS resync round-trip per UE. |
+| `mme_host`, `mme_realm`, `purge_flag` | `ogs_dbi_subscription_data` (HSS) | Tells HSS where the UE was previously attached. When the same UE registers via a different MME, HSS sends a Cancel-Location-Request to the old MME using these fields; without them, the old MME would silently retain a stale UE context. |
+| `imeisv` | nothing reads it back | Written for observability/auditing only. Inspect with `redis-cli HGET open5gs:sub:<imsi> imeisv` to see which device last attached as that subscriber. No daemon decisions depend on it. |
+
+Connection handling: `ogs_flatfile_state_get_*` automatically reconnects
+if Redis bounces, so a Redis restart only affects the daemon during the
+brief window before reconnect — reads transparently fall back to the
+in-memory mirror, and writes resume once the connection is back.
+
+### Redis state — disconnects and key lifecycle
+
+**The `open5gs:sub:<imsi>` HASH is never deleted and never expires.**
+Open5GS issues no `DEL`, no `EXPIRE`, no `TTL` against state keys —
+once written, the HASH persists for the life of the Redis dataset.
+
+This is intentional, not an oversight:
+
+- **`sqn` must persist across detach.** The whole point of storing it
+  in Redis is replay-attack prevention across the AKA flow. If the
+  key were deleted on detach, the next attach would re-read the YAML
+  default `sqn` (often `0` or a small seed) and the USIM would reject
+  the next auth as out-of-sync, forcing an AUTS resync round-trip —
+  the same outcome as not having persistence at all.
+- **`mme_host`/`mme_realm` carry "where was this UE last" semantics.**
+  HSS needs them on the *next* attach to send a Cancel-Location-Request
+  to the old MME. Deleting them on detach would leak a stale UE
+  context on the old MME.
+
+What actually happens during a disconnect:
+
+| Disconnect type | Effect on the Redis HASH |
+|---|---|
+| UE silently leaves coverage | Nothing — the HASH keeps the last-attached state |
+| Clean detach: MME sends S6a Purge-UE-Request | HSS calls `ogs_dbi_update_mme(…, purge_flag=true)` → `HSET … purge_flag 1`. Other fields unchanged. |
+| UE re-attaches at a new MME | HSS reads old `mme_host`/`realm` → sends CLR to that MME → writes new `mme_host`/`realm`, `purge_flag=0` |
+| AKA round-trip completes | HSS/UDR `HSET … sqn <new value>` (overwrites previous) |
+
+So `purge_flag` is the disconnect indicator — not key deletion.
+
+**Practical implications:**
+
+- **Keyspace size is bounded by your provisioned SIM count**, not by
+  active sessions. ~100 bytes per IMSI HASH; 10 k SIMs ≈ 1 MB — not a
+  memory concern for any realistic deployment.
+- **No churn, no eviction pressure under normal use.** Keys are
+  write-rarely: `sqn` a handful of times per session, `mme_host` once
+  per inter-MME handover, `imeisv` once per device swap.
+- **Removing a SIM from `subscribers.yaml` auto-reconciles state.**
+  When the inotify watcher reloads after a save, the daemon diffs the
+  pre-reload IMSI set against the new one and `DEL`s every Redis HASH
+  whose IMSI no longer appears in the file. You'll see one line per
+  removed subscriber in the daemon log:
+
+  ```
+  [dbi] INFO: flatfile: subscriber 001010000000042 removed from YAML — dropping Redis state
+  [dbi] INFO: flatfile: reconciled 1 removed subscriber(s)
+  ```
+
+  This runs under the same cache mutex that guards reads, so an in-flight
+  `ogs_dbi_auth_info()` either sees the old catalog + old state, or the
+  new catalog + reconciled state — never a mix.
+
+- **Safety tripwires.** Two refuse-to-purge conditions protect against
+  the obvious "I accidentally truncated the file" class of mistakes:
+
+  | Trigger | Action |
+  |---|---|
+  | New YAML has 0 subscribers (and old had any) | Skip auto-purge entirely, log a warning telling the operator to `valkey-cli DEL` manually if intentional |
+  | Old had ≥ 4 subscribers and more than half are missing in the new YAML | Same — skip auto-purge, log a warning, reconcile manually |
+
+  These are deliberately conservative. The cost of an accidental
+  mass-purge (every UE re-syncs via AUTS round-trip) is worse than the
+  cost of an operator running a one-off `valkey-cli DEL` to finish the
+  job intentionally.
+
+- **Manual reconcile** (when a tripwire fired, or to clean up before
+  the watcher was wired in):
+
+  ```sh
+  # Drop one
+  valkey-cli DEL open5gs:sub:001010000000042
+
+  # Wipe everything (e.g. lab reset)
+  valkey-cli --scan --pattern 'open5gs:sub:*' | xargs valkey-cli DEL
+
+  # Reconcile: delete every Redis key whose IMSI is no longer in the YAML
+  comm -23 \
+      <(valkey-cli --scan --pattern 'open5gs:sub:*' \
+            | sed 's|^open5gs:sub:||' | sort) \
+      <(yq '.subscribers[].imsi' /etc/open5gs/subscribers.yaml | sort) \
+      | xargs -I{} valkey-cli DEL "open5gs:sub:{}"
+  ```
+
+---
+
+## 3. Live diagnostic state in Redis
+
+In addition to the JSON UDP events emitted by `diagnostic_broadcast()`
+(into [`lib/core/diagnostic-broadcast.c`](lib/core/diagnostic-broadcast.c)),
+the daemons can also maintain **live keys** in Redis representing the
+current state of each gNB / eNB / attached UE / active PDU session.
+The events are still broadcast over UDP for any pre-existing collector
+you might have; the Redis layer is additive.
+
+This is implemented in
+[`lib/core/diagnostic-state.{c,h}`](lib/core/diagnostic-state.h) and
+each entity's connect / attach / create path also does an `HSET` while
+each disconnect / release / remove path does a `DEL`. So the
+keyspace at any moment mirrors what's actually attached — no sidecar
+process needed.
+
+### Configuration
+
+Both the UDP broadcast and the Redis state mirror are configured from a
+top-level `diagnostic:` block in the daemon's YAML config (the same
+file you pass via `-c`). The parser lives in
+[`lib/app/diagnostic-config.c`](lib/app/diagnostic-config.c) and is
+called once from `ogs_app_initialize()` after the YAML has been read,
+before any NF state machine starts firing events.
+
+```yaml
+# /etc/open5gs/amf.yaml (also mme.yaml, smf.yaml, etc.)
+diagnostic:
+  broadcast:
+    enabled: true                   # default true (matches upstream)
+    address: 127.0.0.199            # default
+    port: 2287                      # default
+  state:
+    enabled: false                  # default false — opt-in
+    redis: redis://127.0.0.1:6379/1
+```
+
+Behaviour:
+
+- Both subsections are optional. **An unmodified config (no `diagnostic:`
+  block) behaves exactly like upstream** — UDP broadcast on, Redis state
+  off.
+- `broadcast.enabled: false` short-circuits `diagnostic_broadcast()` so
+  no UDP packets are sent. Useful when you want Redis-only visibility.
+- `state.enabled: true` requires `state.redis:` to be a non-empty
+  `redis://…` URL. If `enabled: true` but the URL is missing/invalid,
+  the parser logs an error and forces the feature off so the daemon
+  still boots.
+- URL grammar matches the HSS state backend:
+  `redis://[:password@]host[:port][/db]`. Use a different `/db` index
+  (e.g. `/1`) from the HSS subscriber store (`/0`) if you want clean
+  visual separation in `valkey-cli --scan`.
+- Configure each NF independently — you can have the AMF publish state
+  while the MME stays UDP-only, etc.
+
+### Key schema
+
+| Key | Type | Fields |
+|---|---|---|
+| `open5gs:live:gnb:<address>` | HASH | `address`, `connected_at` |
+| `open5gs:live:enb:<address>` | HASH | `address`, `connected_at` |
+| `open5gs:live:ue:<imsi>` | HASH | `imsi`, `imei`, `supi`, `suci`, `attached_at` |
+| `open5gs:live:session:<imsi>:<apn>` | HASH | `imsi`, `apn`, `imei`, `supi`, `ipv4`, `ipv6`, `created_at` |
+
+All `*_at` fields are epoch seconds (`time(NULL)` cast to `long long`).
+The `open5gs:live:*` prefix is distinct from the `open5gs:sub:*`
+subscriber-state prefix so they can share the same Redis DB if you
+prefer.
+
+### Where each key gets set / deleted
+
+| Key | SET site | DEL site |
+|---|---|---|
+| `gnb:<address>` | [`src/amf/amf-sm.c`](src/amf/amf-sm.c) on `AMF_EVENT_NGAP_LO_SCTP_COMM_UP` | [`src/amf/context.c`](src/amf/context.c) `amf_gnb_remove()` |
+| `enb:<address>` | [`src/mme/mme-sm.c`](src/mme/mme-sm.c) on `MME_EVENT_S1AP_LO_SCTP_COMM_UP` | [`src/mme/mme-context.c`](src/mme/mme-context.c) `mme_enb_remove()` |
+| `ue:<imsi>` (5G) | [`src/amf/gmm-sm.c`](src/amf/gmm-sm.c) on `REGISTRATION_COMPLETE` | [`src/amf/context.c`](src/amf/context.c) `ran_ue_remove()` + [`src/amf/ngap-handler.c`](src/amf/ngap-handler.c) NG context release |
+| `ue:<imsi>` (4G) | [`src/mme/emm-sm.c`](src/mme/emm-sm.c) on `ATTACH_COMPLETE` | [`src/mme/s1ap-handler.c`](src/mme/s1ap-handler.c) + [`src/mme/mme-context.c`](src/mme/mme-context.c) |
+| `session:<imsi>:<apn>` | [`src/smf/npcf-handler.c`](src/smf/npcf-handler.c) (5G), [`src/smf/pfcp-sm.c`](src/smf/pfcp-sm.c), [`src/smf/gn-handler.c`](src/smf/gn-handler.c) + [`src/smf/s5c-handler.c`](src/smf/s5c-handler.c) (4G) | [`src/smf/context.c`](src/smf/context.c) `smf_sess_remove()` + [`src/mme/mme-context.h`](src/mme/mme-context.h) `CLEAR_SESSION_CONTEXT` macro |
+
+### Inspecting live state
+
+```sh
+# Everything attached right now
+valkey-cli --scan --pattern 'open5gs:live:*' | sort
+
+# Just the gNBs
+valkey-cli --scan --pattern 'open5gs:live:gnb:*'
+
+# Which device is on a given subscriber
+valkey-cli HGET open5gs:live:ue:001010000000001 imei
+
+# How long has the gNB been up (seconds)
+valkey-cli EVAL "return tonumber(ARGV[1]) - tonumber(redis.call('HGET', KEYS[1], 'connected_at'))" \
+    1 open5gs:live:gnb:10.250.2.155 $(date +%s)
+
+# Live tail of state changes during an attach
+valkey-cli PSUBSCRIBE 'open5gs:live:*'   # needs notify-keyspace-events; see §1.4
+```
+
+### Log lines
+
+Both modules log under the `[diag]` domain, installed at boot from
+`ogs_core_initialize()`. Filter the daemon log to see what's happening:
+
+```sh
+grep '\[diag\]' /var/log/open5gs/amf.log
+```
+
+**Boot-time lines** (one shot per daemon, from
+`diagnostic_*_configure()`):
+
+```
+[diag] INFO: broadcast: enabled, target udp://127.0.0.199:2287
+[diag] INFO: state: enabled, redis target 127.0.0.1:6379/1 (lazy connect)
+```
+
+…or, when the YAML flips a feature off:
+
+```
+[diag] INFO: broadcast: disabled
+[diag] INFO: state: disabled (state.enabled=false or no redis URL)
+```
+
+…or, when the YAML is malformed:
+
+```
+[diag] ERROR: state: invalid redis URL 'redis_/host' — feature disabled
+```
+
+**First-use line** (fires on the first gNB connect / UE attach / session
+create, when the lazy Redis connect succeeds):
+
+```
+[diag] INFO: state: connected to redis 127.0.0.1:6379/1
+```
+
+If you do **not** see this line after a UE attaches, the configure
+went through but the TCP connect is failing — and you'll see an error
+on every set/del attempt instead:
+
+```
+[diag] ERROR: state: connect to 127.0.0.1:6379 failed: Connection refused
+[diag] ERROR: state: AUTH against 127.0.0.1:6379 failed: WRONGPASS …
+[diag] ERROR: state: SELECT 1 on 127.0.0.1:6379 failed: invalid DB index
+```
+
+**Runtime warnings** (Redis command-level errors, transient):
+
+```
+[diag] WARNING: state: redis command failed: Connection lost
+[diag] WARNING: state: redis replied with error: NOAUTH …
+```
+
+Reconnects after a Redis bounce will emit a fresh `connected to redis …`
+line, so the log accurately reflects every state transition. There is no
+log throttling — if Redis is down for hours, you'll see one error per
+gNB connect / UE attach / session create. That's intentional; a flapping
+backend that's losing live-state should be loud.
+
+### Caveats
+
+- **Crash recovery.** If a daemon crashes mid-flight (segfault, OOM,
+  kernel panic), keys won't be cleaned up. The keyspace can develop
+  ghost entries until you restart the failed daemon and the next
+  attach refreshes them, or run a manual `valkey-cli --scan ... | DEL`
+  reconcile. Same caveat as the HSS subscriber-state mirror.
+- **No TTL.** Keys persist until the matching DEL fires — same lifecycle
+  semantics as the HSS subscriber state (§2.4). If you want an
+  upper-bound expiry as a safety net, you can wrap the helpers with
+  `EXPIRE open5gs:live:ue:<imsi> 86400` (24 h), but the cleaner answer
+  is to fix any crash that left a ghost.
+- **Thread safety.** All helpers serialise through a single mutex
+  internal to `diagnostic-state.c`. The lock is uncontended on a normal
+  attach rate (a few events per second per UE); if you ever scale to
+  thousands of attaches/sec, revisit.
+
+---
+
+## 4. Building on Alpine
+
+### Runtime + build packages
+
+Delta from a stock Open5GS Alpine build:
+
+| Removed | Added |
+|---|---|
+| `mongo-c-driver-dev` | `hiredis-dev` |
+| `mongo-c-driver` (rt) | `hiredis` (rt) |
+
+`yaml-dev` / `libyaml` are already required by upstream Open5GS — no
+change there.
+
+Full Alpine build-dep list (Alpine ≥ 3.18):
+
+```sh
+apk add --no-cache \
+  build-base meson ninja pkgconf git bison flex python3 \
+  libsctp-dev lksctp-tools-dev \
+  yaml-dev openssl-dev \
+  libgcrypt-dev libidn-dev libtalloc-dev \
+  libnghttp2-dev nghttp2-dev libmicrohttpd-dev curl-dev \
+  gnutls-dev \
+  hiredis-dev
+# (no mongo-c-driver-dev, no libbson-dev)
+```
+
+Runtime image (multi-stage `apk add` in the final layer):
+
+```sh
+apk add --no-cache \
+  libsctp \
+  yaml openssl \
+  libgcrypt libidn libtalloc \
+  libnghttp2 nghttp2 libmicrohttpd \
+  gnutls \
+  hiredis \
+  redis            # only if you want Redis state persistence
+```
+
+### Configure + build
+
+The backend is selected at configure time via the `mongoless` meson
+option. The default is **true** (flat-file).
+
+```sh
+# YAML + Redis backend (default)
+meson setup build
+ninja -C build
+
+# Original MongoDB backend
+meson setup -Dmongoless=false build-mongo
+ninja -C build-mongo
+```
+
+Switching an existing build dir:
+
+```sh
+meson configure build -Dmongoless=false
+ninja -C build
+```
+
+Sanity check the link state:
+
+```sh
+ldd build/src/hss/open5gs-hssd | grep -iE 'mongo|bson|hiredis|yaml'
+# mongoless=true  → libhiredis.so..., libyaml-0.so...
+# mongoless=false → libmongoc-1.0.so..., libbson-1.0.so...
+```
+
+What the option toggles:
+
+| | `mongoless=true` (default) | `mongoless=false` |
+|---|---|---|
+| `lib/dbi` extra deps | `yaml-0.1` + `hiredis` | `libmongoc-1.0` |
+| Extra sources compiled | `ogs-flatfile{,-state,-watcher}.c` | none |
+| `-DMONGOLESS` propagated to consumers | yes | no |
+| `c_std` for `lib/dbi` | `gnu99` | project default `gnu89` |
+| `tests/` subdir | skipped | built |
+
+Everything in the source tree is gated with `#ifndef MONGOLESS` /
+`#ifdef MONGOLESS`, so a single tree compiles cleanly either way.
+
+### Other fork build options
+
+#### `per_apn_dns` — per-APN/per-DNN DNS servers
+
+Independent of the backend choice, the fork can hand **per-APN/per-DNN**
+DNS servers to UEs (via PCO/ePCO) instead of only the global `smf.dns`
+list. It is gated by the `per_apn_dns` meson option (default **true**),
+which injects a project-wide `-DPER_APN_DNS` define.
+
+```sh
+# Feature on (default)
+meson setup build
+
+# Restore upstream global-only DNS (matches v2.7.7-upstream)
+meson configure build -Dper_apn_dns=false
+ninja -C build
+```
+
+Configure DNS per `smf.session` entry; up to 5 IPv4 + 5 IPv6 servers per
+DNN, falling back to global `smf.dns` when a DNN has none:
+
+```yaml
+smf:
+  session:
+    - subnet: 10.46.0.0/16
+      gateway: 10.46.0.1
+      dnn: ims
+      dns: [1.1.1.1, 1.0.0.1, 2606:4700:4700::1111]
+```
+
+What the option toggles:
+
+| | `per_apn_dns=true` (default) | `per_apn_dns=false` |
+|---|---|---|
+| `-DPER_APN_DNS` (project-wide) | yes | no |
+| `OGS_MAX_NUM_OF_DNS` | 5 | undefined (global stays `MAX_NUM_OF_DNS`=2) |
+| Per-DNN `dns:` in `smf.session` | parsed | ignored (`unknown key` warn) |
+| `smf_pco_build()` signature | takes `smf_sess_t *sess` | upstream 3-arg form |
+
+Every change is wrapped in `#ifdef PER_APN_DNS` (upstream code preserved in
+the `#else` branch), so with the option off the tree is byte-for-byte
+upstream v2.7.7 — keeping merges from `v2.7.7-upstream` conflict-free.
+
+### Dockerfile sketch
+
+A minimal Alpine Dockerfile fragment:
+
+```Dockerfile
+FROM alpine:3.20 AS build
+RUN apk add --no-cache build-base meson ninja pkgconf git bison flex python3 \
+    libsctp-dev lksctp-tools-dev yaml-dev openssl-dev \
+    libgcrypt-dev libidn-dev libtalloc-dev libnghttp2-dev nghttp2-dev \
+    libmicrohttpd-dev curl-dev gnutls-dev hiredis-dev
+WORKDIR /src
+COPY . .
+RUN meson setup build && ninja -C build && DESTDIR=/staging ninja -C build install
+
+FROM alpine:3.20
+RUN apk add --no-cache libsctp yaml openssl libgcrypt libidn libtalloc \
+    libnghttp2 nghttp2 libmicrohttpd gnutls hiredis tini
+COPY --from=build /staging /
+COPY configs/subscribers.yaml.in /etc/open5gs/subscribers.yaml
+ENTRYPOINT ["tini","--"]
+```
+
+Redis lives in its own container/sidecar — the HSS only needs the
+`redis://` URI in its YAML.
+
+### Notes
+
+- The fork compiles the new sources with `c_std=gnu99` (overridden in
+  [`lib/dbi/meson.build`](lib/dbi/meson.build)). The rest of the project
+  stays at `gnu89`.
+- Tests under `tests/` are disabled in this fork — see the `build_tests`
+  gate in the top-level [`meson.build`](meson.build). They depend on
+  `tests/common/context.c` which builds BSON documents directly. To
+  re-enable, port that file to write YAML or Redis.
+- iNotify uses an instance per process; on machines with very low
+  `fs.inotify.max_user_instances` the watcher may fail to start. The
+  daemon still runs — only hot reload is lost.
+
+---
+
+## 5. Provisioning subscribers from tooling (Go)
+
+The struct below matches the YAML schema 1:1. Pair it with
+`gopkg.in/yaml.v3` to read/write `subscribers.yaml` from any Go
+provisioning tool.
+
+```go
+package open5gs
+
+// Bitrate matches Open5GS's {value, unit} bitrate encoding.
+// Unit: 0=bps, 1=Kbps, 2=Mbps, 3=Gbps, 4=Tbps.
+type Bitrate struct {
+    Value uint64 `yaml:"value"`
+    Unit  uint8  `yaml:"unit"`
+}
+
+type AMBR struct {
+    Downlink Bitrate `yaml:"downlink"`
+    Uplink   Bitrate `yaml:"uplink"`
+}
+
+type ARP struct {
+    PriorityLevel           uint8 `yaml:"priority_level"`
+    PreEmptionCapability    uint8 `yaml:"pre_emption_capability"`
+    PreEmptionVulnerability uint8 `yaml:"pre_emption_vulnerability"`
+}
+
+type QoS struct {
+    Index uint8    `yaml:"index"`
+    ARP   ARP      `yaml:"arp"`
+    MBR   *Bitrate `yaml:"mbr,omitempty"` // PCC rule only
+    GBR   *Bitrate `yaml:"gbr,omitempty"` // PCC rule only
+}
+
+// Flow describes one packet filter line of a PCC rule.
+type Flow struct {
+    Direction   uint8  `yaml:"direction"`   // 1 = uplink, 2 = downlink, 3 = both
+    Description string `yaml:"description"` // e.g. "permit out ip from any to assigned"
+}
+
+type PCCRule struct {
+    QoS  QoS    `yaml:"qos"`
+    Flow []Flow `yaml:"flow,omitempty"`
+}
+
+type SMFIP struct {
+    IPv4 string `yaml:"ipv4,omitempty"`
+    IPv6 string `yaml:"ipv6,omitempty"`
+}
+
+type UEIP struct {
+    IPv4 string `yaml:"ipv4,omitempty"`
+    IPv6 string `yaml:"ipv6,omitempty"`
+}
+
+type Session struct {
+    Name             string    `yaml:"name"`
+    Type             uint8     `yaml:"type"` // 1=IPv4, 2=IPv6, 3=IPv4v6, 4=Unstructured, 5=Ethernet
+    QoS              QoS       `yaml:"qos"`
+    AMBR             AMBR      `yaml:"ambr"`
+    SMF              *SMFIP    `yaml:"smf,omitempty"`
+    UE               *UEIP     `yaml:"ue,omitempty"`
+    IPv4FramedRoutes []string  `yaml:"ipv4_framed_routes,omitempty"`
+    IPv6FramedRoutes []string  `yaml:"ipv6_framed_routes,omitempty"`
+    PCCRule          []PCCRule `yaml:"pcc_rule,omitempty"`
+}
+
+type Slice struct {
+    SST              uint8     `yaml:"sst"`
+    SD               string    `yaml:"sd,omitempty"`              // 6-hex string; omit for sst-only S-NSSAI
+    DefaultIndicator bool      `yaml:"default_indicator,omitempty"`
+    Session          []Session `yaml:"session"`
+}
+
+// Security keys are stored as upper-case hex strings (same format the
+// original Mongo collection uses).
+type Security struct {
+    K    string `yaml:"k"`              // 32 hex chars
+    OPC  string `yaml:"opc,omitempty"`  // 32 hex chars (preferred)
+    OP   string `yaml:"op,omitempty"`   // 32 hex chars (use OPC OR OP)
+    AMF  string `yaml:"amf"`            // 4 hex chars
+    RAND string `yaml:"rand,omitempty"` // 32 hex chars (test vectors only)
+    SQN  uint64 `yaml:"sqn"`
+}
+
+// --- IMS (iFC) ---
+
+type ApplicationServer struct {
+    ServerName      string `yaml:"server_name"`
+    DefaultHandling int    `yaml:"default_handling"`
+}
+
+type SIPHeader struct {
+    Header  string `yaml:"header"`
+    Content string `yaml:"content,omitempty"`
+}
+
+type SDPLine struct {
+    Line    string `yaml:"line"`
+    Content string `yaml:"content,omitempty"`
+}
+
+type SPT struct {
+    ConditionNegated int        `yaml:"condition_negated,omitempty"`
+    Group            int        `yaml:"group,omitempty"`
+    Method           string     `yaml:"method,omitempty"`
+    SessionCase      *int       `yaml:"session_case,omitempty"`
+    SIPHeader        *SIPHeader `yaml:"sip_header,omitempty"`
+    SDPLine          *SDPLine   `yaml:"sdp_line,omitempty"`
+    RequestURI       string     `yaml:"request_uri,omitempty"`
+}
+
+type TriggerPoint struct {
+    ConditionTypeCNF int   `yaml:"condition_type_cnf"`
+    SPT              []SPT `yaml:"spt,omitempty"`
+}
+
+type IFC struct {
+    Priority          int               `yaml:"priority"`
+    ApplicationServer ApplicationServer `yaml:"application_server"`
+    TriggerPoint      TriggerPoint      `yaml:"trigger_point"`
+}
+
+// Subscriber mirrors one entry in the `subscribers:` sequence.
+type Subscriber struct {
+    IMSI                       string   `yaml:"imsi"`
+    MSISDN                     []string `yaml:"msisdn,omitempty"`
+    IMEISV                     string   `yaml:"imeisv,omitempty"`
+    AccessRestrictionData      uint32   `yaml:"access_restriction_data,omitempty"`
+    SubscriberStatus           uint32   `yaml:"subscriber_status,omitempty"`
+    OperatorDeterminedBarring  uint32   `yaml:"operator_determined_barring,omitempty"`
+    NetworkAccessMode          uint32   `yaml:"network_access_mode,omitempty"`
+    SubscribedRAUTAUTimer      uint32   `yaml:"subscribed_rau_tau_timer,omitempty"`
+
+    AMBR     AMBR     `yaml:"ambr"`
+    Security Security `yaml:"security"`
+    Slice    []Slice  `yaml:"slice"`
+
+    // These three are normally written by the HSS into the Redis state
+    // store at runtime. Setting them in YAML pre-seeds the value used
+    // before the first HSS write.
+    MMEHost   string `yaml:"mme_host,omitempty"`
+    MMERealm  string `yaml:"mme_realm,omitempty"`
+    PurgeFlag bool   `yaml:"purge_flag,omitempty"`
+
+    IFC []IFC `yaml:"ifc,omitempty"`
+}
+
+type State struct {
+    Redis string `yaml:"redis,omitempty"` // redis://[:password@]host[:port][/db]
+}
+
+// Catalog is the root document of subscribers.yaml.
+type Catalog struct {
+    State       State        `yaml:"state,omitempty"`
+    Subscribers []Subscriber `yaml:"subscribers"`
+}
+```
+
+### Example: dump-and-load round trip
+
+```go
+package main
+
+import (
+    "log"
+    "os"
+
+    "gopkg.in/yaml.v3"
+    "example.com/open5gs"
+)
+
+func main() {
+    raw, err := os.ReadFile("/etc/open5gs/subscribers.yaml")
+    if err != nil { log.Fatal(err) }
+
+    var cat open5gs.Catalog
+    if err := yaml.Unmarshal(raw, &cat); err != nil { log.Fatal(err) }
+
+    log.Printf("loaded %d subscribers", len(cat.Subscribers))
+
+    // Add a new SIM
+    cat.Subscribers = append(cat.Subscribers, open5gs.Subscriber{
+        IMSI: "001010000000999",
+        MSISDN: []string{"0000000999"},
+        AMBR: open5gs.AMBR{
+            Downlink: open5gs.Bitrate{Value: 1, Unit: 3},
+            Uplink:   open5gs.Bitrate{Value: 1, Unit: 3},
+        },
+        Security: open5gs.Security{
+            K:   "465B5CE8B199B49FAA5F0A2EE238A6BC",
+            OPC: "E8ED289DEBA952E4283B54E88E6183CA",
+            AMF: "8000",
+        },
+        Slice: []open5gs.Slice{{
+            SST: 1, DefaultIndicator: true,
+            Session: []open5gs.Session{{
+                Name: "internet", Type: 3,
+                QoS: open5gs.QoS{Index: 9, ARP: open5gs.ARP{
+                    PriorityLevel: 8,
+                    PreEmptionCapability: 1,
+                    PreEmptionVulnerability: 1,
+                }},
+                AMBR: open5gs.AMBR{
+                    Downlink: open5gs.Bitrate{Value: 1, Unit: 3},
+                    Uplink:   open5gs.Bitrate{Value: 1, Unit: 3},
+                },
+            }},
+        }},
+    })
+
+    out, _ := yaml.Marshal(&cat)
+    if err := os.WriteFile("/etc/open5gs/subscribers.yaml", out, 0644); err != nil {
+        log.Fatal(err)
+    }
+    // Atomic save-and-rename is fine — the watcher tracks the directory,
+    // not the inode, and debounces for 2s.
+}
+```
+
+To pre-seed runtime state directly in Redis from Go, use
+`github.com/redis/go-redis/v9`:
+
+```go
+rdb := redis.NewClient(&redis.Options{Addr: "127.0.0.1:6379"})
+rdb.HSet(ctx, "open5gs:sub:001010000000999", map[string]any{
+    "sqn": 0,
+})
+```
+
+---
+
+## 6. Migrating from a MongoDB-backed deployment
+
+Quick mongoexport → YAML recipe:
+
+```sh
+mongoexport --db open5gs --collection subscribers --jsonArray \
+  | jq '[.[] | del(._id, .__v)]' \
+  | yq -P '.' -o yaml > subscribers.json.yaml
+# then wrap it under a top-level `subscribers:` key
+printf 'state:\n  redis: redis://127.0.0.1:6379/0\nsubscribers:\n' > subscribers.yaml
+sed 's/^/  /' subscribers.json.yaml >> subscribers.yaml
+```
+
+The Mongo `_id`, `__v`, and `schema_version` fields are ignored if left
+in. Everything else maps by field name.
+
+For mutable state (`sqn`, `mme_host`, `mme_realm`, `purge_flag`,
+`imeisv`), set the per-subscriber values directly in Redis once the new
+HSS is running. Letting it pick them up organically on the first
+attach is usually simpler.

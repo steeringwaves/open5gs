@@ -1,2 +1,10 @@
 option('fuzzing', type: 'boolean', value: false, description: 'Enable fuzzing tests')
 option('lib_fuzzing_engine', type : 'string', value : '', description : 'Path to the libFuzzer engine library')
+# Fork-only: select the dbi backend. true (default) builds the YAML+Redis
+# flat-file backend and gates the MongoDB sources out; false restores the
+# upstream libmongoc path.
+option('mongoless', type: 'boolean', value: true, description: 'Build the flat-file (YAML + Redis) subscriber backend instead of MongoDB')
+# Fork-only: hand per-APN/per-DNN DNS servers to UEs via PCO/ePCO. true
+# (default) compiles the feature in (-DPER_APN_DNS); false restores the
+# upstream global-only DNS behavior so the tree matches v2.7.7-upstream.
+option('per_apn_dns', type: 'boolean', value: true, description: 'Hand per-APN/per-DNN DNS servers to UEs via PCO/ePCO (fork-only)')

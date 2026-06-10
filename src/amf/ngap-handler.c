@@ -1760,6 +1760,22 @@ void ngap_handle_ue_context_release_action(ran_ue_t *ran_ue)
             (long long)ran_ue->amf_ue_ngap_id);
     if (amf_ue) {
         ogs_info("    SUCI[%s]", amf_ue->suci ? amf_ue->suci : "Unknown");
+        {
+            /* Strip the SUPI type prefix so the IMSI field matches the
+             * format the SMF / MME already emit. */
+            const char *imsi_only =
+                    (amf_ue->supi && !strncmp(amf_ue->supi, "imsi-", 5))
+                    ? amf_ue->supi + 5 : "";
+            diagnostic_broadcast(
+                    "{\"Command\":\"UE Release\","
+                    "\"IMSI\":\"%s\",\"SUPI\":\"%s\","
+                    "\"SUCI\":\"%s\",\"IMEI\":\"%s\"}",
+                    imsi_only,
+                    amf_ue->supi ? amf_ue->supi : "",
+                    amf_ue->suci ? amf_ue->suci : "",
+                    amf_ue->imeisv_bcd ? amf_ue->imeisv_bcd : "");
+            diagnostic_state_ue_del(imsi_only);
+        }
 
         /*
          * An assert occurs when a NAS message retransmission occurs.
