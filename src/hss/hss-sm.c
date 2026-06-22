@@ -90,10 +90,15 @@ void hss_state_operational(ogs_fsm_t *s, hss_event_t *e)
     case HSS_EVENT_DBI_MESSAGE:
         ogs_assert(e);
 
+#ifndef MONGOLESS
         ogs_assert(e->dbi.document);
+#endif
+
         hss_handle_change_event(e->dbi.document);
 
+#ifndef MONGOLESS
         bson_destroy(e->dbi.document);
+#endif
         break;
 
     default:
