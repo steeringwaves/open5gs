@@ -31,6 +31,7 @@ int app_initialize(const char *const argv[])
         return rv;
     }
     ogs_info("MME initialize...done");
+    diagnostic_broadcast("{\"Command\":\"MME Initialize\"}");
 
     return OGS_OK;
 }
@@ -40,5 +41,6 @@ void app_terminate(void)
     mme_terminate();
     ogs_sctp_final();
     ogs_info("MME terminate...done");
+    diagnostic_broadcast("{\"Command\":\"MME Terminate\"}");
 }
 
